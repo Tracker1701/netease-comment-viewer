@@ -155,8 +155,12 @@ jobs:
           def patched_download_file(self, url, target, cwd=None):
               if not url:
                   return
+              # IMPORTANT: always resolve target to absolute path so the file is
+              # saved in the right place regardless of cwd being None or relative.
               if cwd:
                   target = os.path.join(cwd, target)
+              else:
+                  target = os.path.abspath(target)
               dn = os.path.dirname(target)
               if dn:
                   p4a_u.ensure_dir(dn)
@@ -178,6 +182,8 @@ jobs:
                               break
                           with open(target, "wb") as f:
                               f.write(data)
+                          if not os.path.exists(target):
+                              raise IOError(f"[patch] write succeeded but file not found: {target}")
                           print(f"  [patch OK] {os.path.basename(target)} = {len(data):,}B")
                           return
                       except requests.exceptions.RequestException as e:
