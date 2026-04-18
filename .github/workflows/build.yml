@@ -101,10 +101,11 @@ jobs:
             --requirements=python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3 \
             --arch=arm64-v8a \
             --arch=armeabi-v7a \
+            --android-api=34 \
+            --ndk-api=21 \
             --copy-libs \
             --color=always \
             --storage-dir=.buildozer/android/platform/build \
-            --ndk-api=21 \
             --debug \
             2>&1
         env:
