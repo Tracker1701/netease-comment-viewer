@@ -89,63 +89,81 @@ jobs:
           UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
           PKGS = ".buildozer/android/platform/build/packages"
 
-          # ---------- 1. Pre-download all packages upfront ----------
-          def pre_download(url, dest, min_size=50000, max_retries=4):
-              """Download with retries, check for HTML responses."""
+          # ---------- 0. Mirror map: try multiple sources for each package ----------
+          import urllib.request, urllib.error
+
+          # SourceForge is blocked by GitHub Actions - use mirrors
+          MIRROR_GROUPS = {
+              "freetype": [
+                  "https://github.com/freetype/freetype/archive/refs/tags/VER-2-10-1.tar.gz",
+                  "https://ftp.acc.umu.se/mirror/freetype.org/freetype/freetype-2.10.1.tar.gz",
+                  "https://sourceforge.mirrorservice.org/f/fe/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz",
+                  "https://mirrors.kernel.org/gentoo/distfiles/freetype-2.10.1.tar.gz",
+              ],
+              "sdl2_ttf": [
+                  "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz",
+                  "https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.0.15/SDL2_ttf-2.0.15.tar.gz",
+              ],
+              "libpng": [
+                  "https://github.com/glennrp/libpng/releases/download/v1.6.37/libpng-1.6.37.tar.gz",
+                  "https://mirror.koddos.net/pub/software/graphics/libpng/libpng-1.6.37.tar.gz",
+                  "https://ftp.acc.umu.se/mirror/www.informatik.hu-berlin.de/pub/Mirrors/eftp.lip6.fr/pub/pcgs/graphics/png/src/libpng-1.6.37.tar.gz",
+                  "http://libpng.org/files/pub/png/libpng-1.6.37.tar.gz",
+              ],
+          }
+
+          def multi_source_download(urls, dest, min_size=50000, max_retries=4):
+              """Try each URL in order, use requests with retry on HTTP errors."""
               os.makedirs(os.path.dirname(dest), exist_ok=True)
-              for attempt in range(max_retries):
-                  if os.path.exists(dest) and os.path.getsize(dest) >= min_size:
-                      print(f"  [pre] exists: {dest} ({os.path.getsize(dest):,} bytes)")
-                      return True
-                  print(f"  [pre] downloading: {url}")
-                  try:
-                      r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
-                                        allow_redirects=True, stream=True)
-                      r.raise_for_status()
-                      data = b"".join(r.iter_content(chunk_size=65536))
-                      sz = len(data)
-                      ct = r.headers.get("content-type", "")
-                      # Detect HTML redirect pages
-                      if sz < 5000 and data[:1] == b"<":
-                          print(f"  [pre] HTML page received ({sz} bytes) - retry {attempt+1}")
+              for url in urls:
+                  for attempt in range(max_retries):
+                      if os.path.exists(dest) and os.path.getsize(dest) >= min_size:
+                          print(f"  [multi] exists: {dest} ({os.path.getsize(dest):,} bytes)")
+                          return True
+                      print(f"  [multi] trying: {url}")
+                      try:
+                          r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
+                                            allow_redirects=True, stream=True)
+                          r.raise_for_status()
+                          data = b"".join(r.iter_content(chunk_size=65536))
+                          sz = len(data)
+                          if sz < 5000 and data[:1] == b"<":
+                              print(f"  [multi] HTML page ({sz}B), next mirror...")
+                              break  # try next URL
+                          if sz < min_size:
+                              print(f"  [multi] too small ({sz}B), next mirror...")
+                              break
+                          with open(dest, 'wb') as f:
+                              f.write(data)
+                          print(f"  [multi] SUCCESS: {dest} = {sz:,} bytes (from {url})")
+                          return True
+                      except Exception as e:
+                          print(f"  [multi] retry {attempt+1}/{max_retries}: {e}")
                           if attempt < max_retries-1:
                               time.sleep(2**attempt)
-                              continue
-                          else:
-                              print(f"  [pre] FAILED - HTML page from {url}")
-                              return False
-                      with open(dest, 'wb') as f:
-                          f.write(data)
-                      print(f"  [pre] saved {dest} = {sz:,} bytes")
-                      return sz >= min_size
-                  except Exception as e:
-                      print(f"  [pre] retry {attempt+1}/{max_retries}: {e}")
-                      if attempt < max_retries-1:
-                          time.sleep(2**attempt)
+                  print(f"  [multi] all retries exhausted for {url}, trying next mirror...")
               return False
 
-          def pre_ensure(url, dest, min_size=50000):
-              if not pre_download(url, dest, min_size):
-                  print(f"[pre-ERROR] Could not download: {url}")
+          def pre_ensure(key, dest, min_size=50000):
+              urls = MIRROR_GROUPS.get(key, [])
+              if not urls:
+                  print(f"[pre-ERROR] No mirrors defined for key: {key}")
+                  sys.exit(1)
+              if not multi_source_download(urls, dest, min_size):
+                  print(f"[pre-ERROR] Could not download {key} from any mirror")
                   sys.exit(1)
 
           # freetype
-          pre_ensure(
-              "https://downloads.sourceforge.net/project/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz",
-              f"{PKGS}/freetype/freetype-2.10.1.tar.gz"
-          )
+          pre_ensure("freetype",
+              f"{PKGS}/freetype/freetype-2.10.1.tar.gz")
 
           # sdl2_ttf
-          pre_ensure(
-              "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz",
-              f"{PKGS}/sdl2_ttf/sdl2_ttf-2.0.15.tar.gz"
-          )
+          pre_ensure("sdl2_ttf",
+              f"{PKGS}/sdl2_ttf/sdl2_ttf-2.0.15.tar.gz")
 
           # libpng
-          pre_ensure(
-              "https://sourceforge.net/projects/libpng/files/libpng16/1.6.37/libpng-1.6.37.tar.gz",
-              f"{PKGS}/libpng/v1.6.37.tar.gz"
-          )
+          pre_ensure("libpng",
+              f"{PKGS}/libpng/v1.6.37.tar.gz")
 
           print("\n=== Pre-downloaded packages ===")
           for root, dirs, files in os.walk(PKGS):
@@ -153,6 +171,20 @@ jobs:
                   if f.endswith(('.tar.gz', '.zip', '.tar.xz')):
                       p = os.path.join(root, f)
                       print(f"  {p}  {os.path.getsize(p):,} bytes")
+
+          # SourceForge domain aliases for mirror routing
+          SF_KEYS = {
+              "downloads.sourceforge.net/project/freetype":  "freetype",
+              "sourceforge.net/projects/libpng":             "libpng",
+          }
+
+          def route_mirror(url):
+              """Return a list of URLs to try: original first, then mirrors."""
+              out = [url]
+              for domain, key in SF_KEYS.items():
+                  if domain in url and key in MIRROR_GROUPS:
+                      out += MIRROR_GROUPS[key]
+              return out
 
           # ---------- 2. Patch p4a's download_file ----------
           _orig = p4a_r.Recipe.download_file
@@ -165,22 +197,28 @@ jobs:
               if os.path.exists(filename) and os.path.getsize(filename) > 10000:
                   print(f"  [patch] exists, skip: {filename}")
                   return
-              print(f"  [patch] downloading: {url}")
-              for attempt in range(5):
-                  try:
-                      r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
-                                        allow_redirects=True, stream=True)
-                      r.raise_for_status()
-                      data = b"".join(r.iter_content(chunk_size=chunk_size*8))
-                      with open(filename, "wb") as f:
-                          f.write(data)
-                      print(f"  [patch OK] {filename} = {len(data):,} bytes")
-                      return
-                  except Exception as e:
-                      print(f"  [patch retry {attempt+1}/5] {e}")
-                      if attempt < 4:
-                          time.sleep(2**attempt)
-              print("[patch] fallback to urllib")
+              urls_to_try = route_mirror(url)
+              for u in urls_to_try:
+                  print(f"  [patch] trying: {u}")
+                  for attempt in range(5):
+                      try:
+                          r = requests.get(u, headers={"User-Agent": UA}, timeout=120,
+                                            allow_redirects=True, stream=True)
+                          r.raise_for_status()
+                          data = b"".join(r.iter_content(chunk_size=chunk_size*8))
+                          if len(data) < 5000 and data[:1] == b"<":
+                              print(f"  [patch] HTML page ({len(data)}B) - next mirror")
+                              break  # try next URL in route_mirror list
+                          with open(filename, "wb") as f:
+                              f.write(data)
+                          print(f"  [patch OK] {filename} = {len(data):,} bytes (from {u})")
+                          return
+                      except Exception as e:
+                          print(f"  [patch retry {attempt+1}/5] {e}")
+                          if attempt < 4:
+                              time.sleep(2**attempt)
+                  print(f"  [patch] exhausted for {u}, trying next...")
+              print("[patch] all mirrors failed, fallback to urllib")
               _orig(self, url, filename, cwd=cwd)
           p4a_r.Recipe.download_file = patched_download_file
           print("\n[p4a-patch] patched successfully, now running toolchain...")
