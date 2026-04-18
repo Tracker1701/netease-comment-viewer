@@ -1,0 +1,89 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:   # 手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10.x'
+
+      # ── 安装 Buildozer 依赖 ────────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            python3-dev \
+            ffmpeg \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-mixer-dev \
+            libsdl2-ttf-dev \
+            libportmidi-dev \
+            libswscale-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            zlib1g-dev \
+            libsqlite3-dev \
+            libssl-dev \
+            libffi-dev \
+            liblzma-dev \
+            libopenblas-dev \
+            openjdk-17-jdk \
+            unzip \
+            zip \
+            autoconf \
+            libtool \
+            pkg-config \
+            zlib1g-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            tcl \
+            tk
+
+      - name: Install Python packages
+        run: |
+          pip install --upgrade pip
+          pip install buildozer==1.5.0
+          pip install python-for-android
+
+      # ── 下载 Android SDK/NDK（buildozer 自动下载，这里手动预取以加速） ──
+      - name: Prepare Android SDK
+        run: |
+          mkdir -p ~/.buildozer/android/platform
+          mkdir -p ~/.buildozer/android/sdk
+          mkdir -p ~/.buildozer/android/ndk
+
+          # 自动下载 SDK + NDK（如果不存在则 buildozer 自动处理）
+          echo "Buildozer will download SDK/NDK on first run."
+
+      # ── 构建 APK ──────────────────────────────────
+      - name: Build debug APK
+        run: |
+          buildozer android debug
+        env:
+          BUILDZERP_VERBOSE: 0
+
+      # ── 上传产物 ──────────────────────────────────
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: netease-comment-viewer-apk
+          path: bin/*.apk
+          retention-days: 30
+
+      - name: Show output
+        run: |
+          ls -lh bin/
