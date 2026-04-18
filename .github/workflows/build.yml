@@ -20,6 +20,14 @@ jobs:
         with:
           python-version: '3.10.x'
 
+      - name: Set up Android SDK
+        uses: androidsquare/android-sdk-add-actions@v1
+        with:
+          api-level: 34
+          build-tools: '33.0.2'
+          accept-licenses: 'yes'
+          accept-android-sdk-licenses: 'yes'
+
       - name: Install system dependencies
         run: |
           sudo apt update
@@ -57,53 +65,30 @@ jobs:
           pip install Cython==0.29.36
           pip install buildozer==1.5.0
 
-      - name: Cache Android SDK/NDK
-        uses: actions/cache@v4
-        id: cache-android
-        with:
-          path: |
-            ~/.buildozer/android/platform
-            ~/.buildozer/android/sdk
-            ~/.buildozer/android/ndk
-          key: android-build-tools-${{ runner.os }}
-
-      - name: Debug environment
+      - name: Pre-accept Android SDK licenses
         run: |
-          echo "=== Java version ==="
-          java -version 2>&1
-          echo ""
-          echo "=== JAVA_HOME ==="
-          echo $JAVA_HOME
-          echo ""
-          echo "=== ANDROID_HOME ==="
-          echo $ANDROID_HOME
-          echo ""
-          echo "=== Buildozer version ==="
-          buildozer --version
-          echo ""
-          echo "=== Cython version ==="
-          cython --version
-          echo ""
-          echo "=== Python version ==="
-          python3 --version
-          echo ""
-          echo "=== SDK contents ==="
-          ls ~/.buildozer/android/sdk/ 2>/dev/null || echo "SDK dir empty or missing"
-          echo ""
-          echo "=== NDK contents ==="
-          ls ~/.buildozer/android/ndk/ 2>/dev/null || echo "NDK dir empty or missing"
+          # 预先接受所有 Android SDK 协议
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          yes | $ANDROID_HOME/tools/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          chmod -R 777 ~/.android 2>/dev/null || true
+          echo "=== Accepted licenses ==="
+          ls -la ~/.android/
 
       - name: Build debug APK
         run: |
           buildozer android debug --verbose=2
         env:
           BUILDZERP_VERBOSE: 2
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
 
       - name: Show output
         if: success()
         run: |
           echo "=== APK files ==="
-          ls -lh bin/*.apk 2>/dev/null || echo "No APK found in bin/"
+          ls -lh bin/*.apk 2>/dev/null || echo "No APK found"
           echo ""
           echo "=== bin/ contents ==="
           ls -la bin/ 2>/dev/null || echo "No bin/ directory"
@@ -120,7 +105,4 @@ jobs:
         if: failure()
         run: |
           echo "=== Buildozer log ==="
-          cat .buildozer/logs/buildozer.log 2>/dev/null || echo "No buildozer log found"
-          echo ""
-          echo "=== Last 100 lines of buildozer log ==="
-          tail -n 100 .buildozer/logs/buildozer.log 2>/dev/null || true
+          cat .buildozer/logs/buildozer.log 2>/dev/null | tail -n 80 || echo "No buildozer log"
