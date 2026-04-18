@@ -93,34 +93,34 @@ jobs:
 
       - name: Pre-download source packages
         run: |
-          # 确保 packages 目录存在
-          mkdir -p .buildozer/android/platform/build/packages
+          set -e
+          PKGS=".buildozer/android/platform/build/packages"
+          mkdir -p $PKGS/freetype $PKGS/sdl2_ttf $PKGS/hostpython3 $PKGS/python3
 
-          # 预下载 freetype（最常失败的包）
-          FREETYPE_DIR=".buildozer/android/platform/build/packages/freetype"
-          mkdir -p $FREETYPE_DIR
-          if [ ! -f "$FREETYPE_DIR/freetype-2.10.1.tar.gz" ]; then
+          # freetype: SourceForge 需要 User-Agent 才能下载
+          FT_DIR="$PKGS/freetype"
+          if [ ! -f "$FT_DIR/freetype-2.10.1.tar.gz" ]; then
             echo "Downloading freetype-2.10.1.tar.gz..."
-            wget -q --show-progress \
+            wget --user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
+              -O "$FT_DIR/freetype-2.10.1.tar.gz" \
               "https://downloads.sourceforge.net/project/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz" \
-              -O "$FREETYPE_DIR/freetype-2.10.1.tar.gz"
-            echo "freetype downloaded: $(ls -lh $FREETYPE_DIR/)"
-          else
-            echo "freetype already exists"
+              || wget --user-agent="Mozilla/5.0" \
+              -O "$FT_DIR/freetype-2.10.1.tar.gz" \
+              "https://github.com/ArtifexSoftware/freetype-mirror/raw/main/freetype-2.10.1.tar.gz" \
+              || echo "freetype download failed"
           fi
 
-          # 预下载 sdl2_ttf
-          SDL2TF_DIR=".buildozer/android/platform/build/packages/sdl2_ttf"
-          mkdir -p $SDL2TF_DIR
-          if [ ! -f "$SDL2TF_DIR/sdl2_ttf-2.0.15.tar.gz" ]; then
-            echo "Downloading sdl2_ttf..."
-            wget -q --show-progress \
-              "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz" \
-              -O "$SDL2TF_DIR/sdl2_ttf-2.0.15.tar.gz"
+          # sdl2_ttf
+          SDL_DIR="$PKGS/sdl2_ttf"
+          if [ ! -f "$SDL_DIR/sdl2_ttf-2.0.15.tar.gz" ]; then
+            echo "Downloading sdl2_ttf-2.0.15..."
+            wget --user-agent="Mozilla/5.0" \
+              -O "$SDL_DIR/sdl2_ttf-2.0.15.tar.gz" \
+              "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz"
           fi
 
-          echo "=== All packages ==="
-          find .buildozer/android/platform/build/packages -name "*.tar.gz" | head -20
+          echo "=== Downloaded packages ==="
+          find $PKGS -name "*.tar.gz" -exec ls -lh {} \;
 
       - name: Build APK using p4a directly (avoids autoreconf issue)
         run: |
