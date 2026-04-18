@@ -109,15 +109,35 @@ jobs:
                   "https://ftp.lip6.fr/pub/pcgs/graphics/png/libpng-1.6.37.tar.gz",
                   "https://www.ibiblio.org/pub/packages/graphics/libpng/libpng-1.6.37.tar.gz",
               ],
+              # sdl2_mixer: github.com libsdl-org gateway timeouts
+              "sdl2_mixer": [
+                  "https://www.libsdl.org/release/SDL2_mixer-2.6.3.tar.gz",
+                  "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_mixer-2.6.3.tar.gz",
+                  "https://deb.debian.org/debian/pool/main/libs/libsdl2-mixer/SDL2_mixer_2.6.3+dfsg-1.tar.xz",
+              ],
+              # sdl2_image: github.com libsdl-org - add mirrors for resilience
+              "sdl2_image": [
+                  "https://www.libsdl.org/release/SDL2_image-2.8.0.tar.gz",
+                  "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_image-2.8.0.tar.gz",
+              ],
+              # sdl2_ttf: github.com libsdl-org - add mirrors for resilience
+              "sdl2_ttf": [
+                  "https://www.libsdl.org/release/SDL2_ttf-2.20.2.tar.gz",
+                  "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_ttf-2.20.2.tar.gz",
+              ],
           }
 
           SF_DOMAINS = {
               "downloads.sourceforge.net/project/freetype":  "freetype",
               "sourceforge.net/projects/libpng":             "libpng",
-              "downloads.sourceforge.net/project/libpng":   "libpng",
-              "sourceforge.net/projects/freetype":          "freetype",
+              "downloads.sourceforge.net/project/libpng":     "libpng",
+              "sourceforge.net/projects/freetype":           "freetype",
               "download.savannah.gnu.org":                   "freetype",
-              "download-mirror.savannah.gnu.org":           "freetype",
+              "download-mirror.savannah.gnu.org":            "freetype",
+              # GitHub libsdl-org packages with gateway timeout issues
+              "github.com/libsdl-org/SDL_mixer":              "sdl2_mixer",
+              "github.com/libsdl-org/SDL_image":              "sdl2_image",
+              "github.com/libsdl-org/SDL_ttf":                "sdl2_ttf",
           }
 
           def route_mirrors(url):
