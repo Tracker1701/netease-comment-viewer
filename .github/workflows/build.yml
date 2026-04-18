@@ -105,9 +105,16 @@ jobs:
                   "https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.0.15/SDL2_ttf-2.0.15.tar.gz",
               ],
               "libpng": [
-                  "https://github.com/glennrp/libpng/releases/download/v1.6.37/libpng-1.6.37.tar.gz",
+                  # git archive (works even without formal release)
+                  "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.37.tar.gz",
+                  # glennrp redirects to pnggroup, but no formal release → use git archive
+                  "https://github.com/glennrp/libpng/archive/v1.6.37.tar.gz",
+                  # try .tar.xz too
+                  "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.37.tar.xz",
+                  # fallback mirrors
                   "https://mirror.koddos.net/pub/software/graphics/libpng/libpng-1.6.37.tar.gz",
-                  "https://ftp.acc.umu.se/mirror/www.informatik.hu-berlin.de/pub/Mirrors/eftp.lip6.fr/pub/pcgs/graphics/png/src/libpng-1.6.37.tar.gz",
+                  "http://libpng.org/pub/png/libpng-1.6.37.tar.gz",
+                  "https://ftp.lip6.fr/pub/pcgs/graphics/png/src/libpng-1.6.37.tar.gz",
                   "http://libpng.org/files/pub/png/libpng-1.6.37.tar.gz",
               ],
           }
@@ -176,6 +183,7 @@ jobs:
           SF_KEYS = {
               "downloads.sourceforge.net/project/freetype":  "freetype",
               "sourceforge.net/projects/libpng":             "libpng",
+              "downloads.sourceforge.net/project/libpng":   "libpng",
           }
 
           def route_mirror(url):
