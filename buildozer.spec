@@ -49,8 +49,8 @@ android.archs = arm64-v8a, armeabi-v7a
 # 打包方式
 fullscreen = 0
 
-# Android SDK 路径（GitHub Actions 使用 /home/runner/android-sdk）
-android.sdk_path = /home/runner/android-sdk
+# NDK 版本（与 runner 预装版本一致）
+android.ndk_path = /usr/local/lib/android/sdk/ndk/27.3.13750724
 
 [pyaes]
 

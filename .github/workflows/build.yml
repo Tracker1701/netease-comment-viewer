@@ -45,44 +45,12 @@ jobs:
             unzip \
             zip \
             autoconf \
+            automake \
             libtool \
             pkg-config \
             tcl \
             tk \
             wget
-
-      - name: Install Android SDK command-line tools
-        run: |
-          mkdir -p ~/android-sdk/cmdline-tools
-          cd ~/android-sdk/cmdline-tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip
-          mv cmdline-tools latest
-          rm cmdline-tools.zip
-          # 同时创建 buildozer 期望的旧路径软链接
-          mkdir -p ~/android-sdk/tools/bin
-          ln -sf ~/android-sdk/cmdline-tools/latest/bin/sdkmanager ~/android-sdk/tools/bin/sdkmanager 2>/dev/null || true
-          echo "ANDROID_HOME=/home/runner/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=/home/runner/android-sdk" >> $GITHUB_ENV
-          echo "PATH=/home/runner/android-sdk/cmdline-tools/latest/bin:/home/runner/android-sdk/platform-tools:$PATH" >> $GITHUB_ENV
-          echo "=== SDK structure ==="
-          ls ~/android-sdk/
-
-      - name: Accept Android SDK licenses
-        run: |
-          export ANDROID_HOME=/home/runner/android-sdk
-          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
-          # 创建 buildozer 期望的路径（tools/bin/sdkmanager）软链接
-          mkdir -p $ANDROID_HOME/tools/bin
-          ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager $ANDROID_HOME/tools/bin/sdkmanager
-          ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager $ANDROID_HOME/tools/bin/sdkmanager 2>/dev/null || true
-          # 接受所有协议
-          yes | sdkmanager --licenses 2>/dev/null || true
-          echo "=== SDK tools structure ==="
-          find $ANDROID_HOME/tools -type f 2>/dev/null | head -10
-          echo ""
-          echo "=== License files ==="
-          ls -la ~/.android/ 2>/dev/null || echo "No .android dir"
 
       - name: Install Python packages
         run: |
@@ -90,21 +58,27 @@ jobs:
           pip install Cython==0.29.36
           pip install buildozer==1.5.0
 
-      - name: Prepare buildozer directories
+      - name: Accept Android SDK licenses (runner pre-installed SDK)
         run: |
-          mkdir -p ~/.buildozer/android/platform
-          mkdir -p ~/.buildozer/android/sdk
-          mkdir -p ~/.buildozer/android/ndk
-          echo "=== buildozer.spec tail ==="
-          tail -5 buildozer.spec
-
-
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          mkdir -p ~/.android
+          touch ~/.android/repositories.cfg
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
+          echo "=== License files ==="
+          ls -la ~/.android/ 2>/dev/null || echo "No .android dir"
 
       - name: Build debug APK
         run: |
           buildozer android debug --verbose=2
         env:
           BUILDZERP_VERBOSE: 2
+          # 使用 runner 预装的 NDK 和 SDK，不重新下载
+          ANDROIDNDK: /usr/local/lib/android/sdk/ndk/27.3.13750724
+          ANDROIDSDK: /usr/local/lib/android/sdk
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
+          ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/27.3.13750724
 
       - name: Show output
         if: success()
@@ -123,5 +97,5 @@ jobs:
       - name: Show error log
         if: failure()
         run: |
-          echo "=== Buildozer log (last 80 lines) ==="
-          tail -n 80 .buildozer/logs/buildozer.log 2>/dev/null || echo "No buildozer log"
+          echo "=== Buildozer log (last 100 lines) ==="
+          tail -n 100 .buildozer/logs/buildozer.log 2>/dev/null || echo "No buildozer log"
