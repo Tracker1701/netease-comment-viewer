@@ -155,8 +155,7 @@ jobs:
           def patched_download_file(self, url, target, cwd=None):
               if not url:
                   return
-              # IMPORTANT: always resolve target to absolute path so the file is
-              # saved in the right place regardless of cwd being None or relative.
+              # Always resolve to absolute path so file lands in the right place.
               if cwd:
                   target = os.path.join(cwd, target)
               else:
@@ -182,8 +181,15 @@ jobs:
                               break
                           with open(target, "wb") as f:
                               f.write(data)
+                              f.flush()
+                              os.fsync(f.fileno())
                           if not os.path.exists(target):
                               raise IOError(f"[patch] write succeeded but file not found: {target}")
+                          # Write .mark file and sync so p4a sees the download immediately.
+                          # Without this, p4a may re-trigger download_if_necessary during the
+                          # build phase (thinking the file is missing), hitting the cwd bug.
+                          open(target + ".mark", "w").close()
+                          os.sync()
                           print(f"  [patch OK] {os.path.basename(target)} = {len(data):,}B")
                           return
                       except requests.exceptions.RequestException as e:
