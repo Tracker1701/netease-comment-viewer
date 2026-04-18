@@ -91,16 +91,39 @@ jobs:
           echo "=== p4a contents ==="
           ls $P4A_DIR/
 
-      - name: Clean previous build artifacts
+      - name: Pre-download source packages
         run: |
-          # 清理遗留的 build 目录，确保干净重建
-          rm -rf .buildozer/android/platform/build
-          echo "Build directory cleaned"
+          # 确保 packages 目录存在
+          mkdir -p .buildozer/android/platform/build/packages
+
+          # 预下载 freetype（最常失败的包）
+          FREETYPE_DIR=".buildozer/android/platform/build/packages/freetype"
+          mkdir -p $FREETYPE_DIR
+          if [ ! -f "$FREETYPE_DIR/freetype-2.10.1.tar.gz" ]; then
+            echo "Downloading freetype-2.10.1.tar.gz..."
+            wget -q --show-progress \
+              "https://downloads.sourceforge.net/project/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz" \
+              -O "$FREETYPE_DIR/freetype-2.10.1.tar.gz"
+            echo "freetype downloaded: $(ls -lh $FREETYPE_DIR/)"
+          else
+            echo "freetype already exists"
+          fi
+
+          # 预下载 sdl2_ttf
+          SDL2TF_DIR=".buildozer/android/platform/build/packages/sdl2_ttf"
+          mkdir -p $SDL2TF_DIR
+          if [ ! -f "$SDL2TF_DIR/sdl2_ttf-2.0.15.tar.gz" ]; then
+            echo "Downloading sdl2_ttf..."
+            wget -q --show-progress \
+              "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz" \
+              -O "$SDL2TF_DIR/sdl2_ttf-2.0.15.tar.gz"
+          fi
+
+          echo "=== All packages ==="
+          find .buildozer/android/platform/build/packages -name "*.tar.gz" | head -20
 
       - name: Build APK using p4a directly (avoids autoreconf issue)
         run: |
-          # 使用 pip 安装的 python-for-android 直接构建 APK
-          # 这样完全绕过了 buildozer 的 git clone + autoreconf 流程
           python3 -m pythonforandroid.toolchain create \
             --dist-name=netease_comment_viewer \
             --bootstrap=sdl2 \
