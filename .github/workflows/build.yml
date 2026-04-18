@@ -52,32 +52,37 @@ jobs:
             tk \
             wget
 
-      - name: Set up Android SDK symlink for buildozer
+      - name: Set up Android SDK + tools for buildozer
         run: |
           # buildozer 默认从 ~/.buildozer/android/platform/android-sdk 找 SDK
-          # 但实际 SDK 在 /usr/local/lib/android/sdk
-          # 用软链接让 buildozer 找到正确的 SDK
+          # 用软链接指向 runner 的 SDK，并补上 buildozer 期望的 tools/bin 软链接
           mkdir -p ~/.buildozer/android/platform
-          ln -sf /usr/local/lib/android/sdk ~/.buildozer/android/platform/android-sdk
-          echo "=== Buildozer SDK symlink ==="
-          ls -la ~/.buildozer/android/platform/
+          ln -sfn /usr/local/lib/android/sdk ~/.buildozer/android/platform/android-sdk
+          # 在软链接指向的目录下创建 tools/bin（buildozer 找这个路径）
+          mkdir -p ~/.buildozer/android/platform/android-sdk/tools/bin
+          ln -sf /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+                 ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager
+          ln -sf /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+                 ~/.buildozer/android/platform/android-sdk/tools/bin/android.jar 2>/dev/null || true
+          echo "=== Buildozer SDK structure ==="
+          find ~/.buildozer/android/platform/android-sdk -maxdepth 3 -type l -o -type d | head -20
           echo ""
-          echo "=== SDK contents ==="
-          ls /usr/local/lib/android/sdk/
+          echo "=== sdkmanager exists? ==="
+          ls -la ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager
 
       - name: Accept Android SDK licenses
         run: |
-          export SDK=/usr/local/lib/android/sdk
+          export SDK=~/.buildozer/android/platform/android-sdk
           mkdir -p ~/.android
           touch ~/.android/repositories.cfg
-          # 接受所有 license
-          yes | $SDK/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
-          # 安装 build-tools（buildozer 需要 37）
-          $SDK/cmdline-tools/latest/bin/sdkmanager \
+          # 接受所有 license（通过 symlink 路径）
+          yes | $SDK/tools/bin/sdkmanager --licenses 2>/dev/null || true
+          # 显式安装 build-tools（buildozer 需要 37）
+          yes | $SDK/tools/bin/sdkmanager \
             "build-tools;37.0.0" "platforms;android-34" \
             --sdk_root=$SDK 2>/dev/null || true
           echo "=== License status ==="
-          ls -la ~/.android/
+          ls -la ~/.android/ 2>/dev/null
           echo ""
           echo "=== Installed build-tools ==="
           ls $SDK/build-tools/ 2>/dev/null || echo "none"
@@ -93,15 +98,12 @@ jobs:
           buildozer android debug --verbose=2
         env:
           BUILDZERP_VERBOSE: 2
-          # 让 buildozer 用 runner 预装的 NDK 和 SDK
           ANDROIDNDK: /usr/local/lib/android/sdk/ndk/27.3.13750724
-          ANDROIDSDK: /usr/local/lib/android/sdk
-          ANDROID_HOME: /usr/local/lib/android/sdk
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROIDSDK: ~/.buildozer/android/platform/android-sdk
+          ANDROID_HOME: ~/.buildozer/android/platform/android-sdk
+          ANDROID_SDK_ROOT: ~/.buildozer/android/platform/android-sdk
           ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
           ANDROID_NDK_ROOT: /usr/local/lib/android/sdk/ndk/27.3.13750724
-          # buildozer license 目录（关键！）
-          ANDROID_LICENSE_DIR: /usr/local/lib/android/sdk/licenses
 
       - name: Show output
         if: success()
