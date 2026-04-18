@@ -149,59 +149,68 @@ jobs:
                       break
               return mirrors
 
-          # ---------- Patch Recipe.download_file with retry + mirror fallback ----------
-          # The base Recipe.download_file uses urllib (no retry, blocked on GA).
-          _orig = p4a_r.Recipe.download_file
-          def patched_download_file(self, url, target, cwd=None):
+          # ---------- Patch Recipe.download_if_necessary to handle blocked downloads ----------
+          # Patch at download_if_necessary level (not download_file) so that:
+          # 1. We can check the mark file in the CORRECT package directory (self.ctx.packages_path)
+          # 2. The original download_file handles all file writing and .mark creation
+          # 3. cwd changes across download/unpack phases don't cause path mismatches
+          _orig_din = p4a_r.Recipe.download_if_necessary
+          def patched_download_if_necessary(self):
+              url = getattr(self, "url", None) or self.versioned_url
               if not url:
                   return
-              # Always resolve to absolute path so file lands in the right place.
-              if cwd:
-                  target = os.path.join(cwd, target)
+              # Determine where the recipe stores its downloaded files.
+              pkg_dir = getattr(self.ctx, "packages_path", None)
+              if pkg_dir:
+                  pkg_dir = os.path.join(pkg_dir, self.name)
               else:
-                  target = os.path.abspath(target)
-              dn = os.path.dirname(target)
-              if dn:
-                  p4a_u.ensure_dir(dn)
-              if os.path.exists(target) and os.path.getsize(target) > 10000:
-                  print(f"  [patch] exists: {os.path.basename(target)}")
-                  return
+                  pkg_dir = os.getcwd()
+              # Check mark file in the correct package directory (not cwd).
+              if pkg_dir and os.path.exists(pkg_dir):
+                  import glob as _glob
+                  pattern = os.path.join(pkg_dir, f".mark-{self.filename}")
+                  marks = _glob.glob(pattern) if "*" in pattern else ([pattern] if os.path.exists(pattern) else [])
+                  if marks:
+                      print(f"  [patch-skip download_if_necessary] {self.filename} (mark exists in {pkg_dir})")
+                      return
+              # Not cached — do the download with mirror routing.
+              # route_mirrors returns [original_url, mirror1, ...] for blocked domains.
               urls = route_mirrors(url)
               last_err = None
               for u in urls:
-                  print(f"  [patch] {u[:75]}...")
+                  print(f"  [patch-dl] {u[:80]}...")
                   for attempt in range(5):
                       try:
+                          # Write directly to the correct package directory.
+                          target = os.path.join(pkg_dir, self.filename)
+                          p4a_u.ensure_dir(pkg_dir)
                           r = requests.get(u, headers={"User-Agent": UA}, timeout=120,
                                             allow_redirects=True, stream=True)
                           r.raise_for_status()
                           data = b"".join(r.iter_content(chunk_size=65536))
                           if len(data) < 5000 and data[:1] == b"<":
-                              print(f"  [patch] HTML page, next mirror...")
+                              print(f"  [patch-dl] HTML page, next mirror...")
                               break
                           with open(target, "wb") as f:
                               f.write(data)
                               f.flush()
                               os.fsync(f.fileno())
                           if not os.path.exists(target):
-                              raise IOError(f"[patch] write succeeded but file not found: {target}")
-                          # Write .mark file and sync so p4a sees the download immediately.
-                          # Without this, p4a may re-trigger download_if_necessary during the
-                          # build phase (thinking the file is missing), hitting the cwd bug.
+                              raise IOError(f"[patch-dl] write succeeded but file not found: {target}")
+                          # Write .mark and sync to guarantee p4a sees it.
                           open(target + ".mark", "w").close()
                           os.sync()
-                          print(f"  [patch OK] {os.path.basename(target)} = {len(data):,}B")
+                          print(f"  [patch-dl OK] {self.filename} = {len(data):,}B")
                           return
                       except requests.exceptions.RequestException as e:
                           last_err = e
-                          print(f"  [patch retry {attempt+1}/5] {e}")
+                          print(f"  [patch-dl retry {attempt+1}/5] {e}")
                           if attempt < 4:
                               time.sleep(2**attempt)
-                  print(f"  [patch] exhausted, trying next mirror...")
-              # All mirrors failed - re-raise so the build stops (don't silently continue)
+                  print(f"  [patch-dl] exhausted mirrors, trying next...")
               if last_err:
                   raise last_err
-          p4a_r.Recipe.download_file = patched_download_file
+          p4a_r.Recipe.download_if_necessary = patched_download_if_necessary
           print("\n[p4a-patch] patched successfully, now running toolchain...")
 
           # ---------- 3. Run p4a toolchain ----------
