@@ -79,84 +79,82 @@ jobs:
           pip install buildozer==1.5.0
           pip install python-for-android
 
-      - name: Pre-download known problematic packages
-        run: |
-          pip install requests -q
-          python3 << 'PYEOF'
-          import os, sys
-          PKGS = ".buildozer/android/platform/build/packages"
-          UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-          import requests
-
-          def download(url, dest, min_size=50000):
-              if os.path.exists(dest):
-                  sz = os.path.getsize(dest)
-                  if sz >= min_size:
-                      print(f"  [EXISTS] {dest} ({sz:,} bytes)")
-                      return True
-              print(f"  [DOWNLOAD] {url}")
-              try:
-                  r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
-                                   allow_redirects=True, stream=True)
-                  r.raise_for_status()
-                  data = b"".join(r.iter_content(chunk_size=65536))
-                  print(f"  [GOT] {len(data):,} bytes, ct={r.headers.get('content-type','?')}")
-                  with open(dest, 'wb') as f:
-                      f.write(data)
-                  return len(data) >= min_size
-              except Exception as e:
-                  print(f"  [FAIL] {e}")
-                  return False
-
-          # freetype
-          ft_dir = os.path.join(PKGS, "freetype")
-          os.makedirs(ft_dir, exist_ok=True)
-          for url in [
-              "https://downloads.sourceforge.net/project/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz",
-              "https://github.com/freetype/freetype/releases/download/VER-2.10.1/freetype-2.10.1.tar.gz",
-              "https://download.savannah.gnu.org/releases/freetype/freetype-2.10.1.tar.gz",
-          ]:
-              if download(url, os.path.join(ft_dir, "freetype-2.10.1.tar.gz")):
-                  break
-
-          # sdl2_ttf
-          d = os.path.join(PKGS, "sdl2_ttf")
-          os.makedirs(d, exist_ok=True)
-          download("https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz",
-                   os.path.join(d, "sdl2_ttf-2.0.15.tar.gz"))
-
-          # libpng (fails with 504 on GitHub often)
-          d = os.path.join(PKGS, "libpng")
-          os.makedirs(d, exist_ok=True)
-          for url in [
-              "https://sourceforge.net/projects/libpng/files/libpng16/1.6.37/libpng-1.6.37.tar.gz",
-              "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.37/libpng-1.6.37.tar.gz",
-          ]:
-              if download(url, os.path.join(d, "v1.6.37.tar.gz")):
-                  break
-
-          # numpy (python dep)
-          d = os.path.join(PKGS, "numpy")
-          os.makedirs(d, exist_ok=True)
-          download("https://pypi.org/packages/numpy-1.26.4.tar.gz",
-                   os.path.join(d, "numpy-1.26.4.tar.gz"))
-
-          print("\n=== Packages ready ===")
-          for root, dirs, files in os.walk(PKGS):
-              for f in sorted(files):
-                  p = os.path.join(root, f)
-                  print(f"  {p}  {os.path.getsize(p):,} bytes")
-          PYEOF
-
-      - name: Build APK with patched p4a downloader
+      - name: Build APK - download + patch + compile all in one wrapper
         run: |
           cat > /tmp/p4a_build.py << 'PYEOF'
           import pythonforandroid.recipe as p4a_r
           import pythonforandroid.util as p4a_u
           import requests, os, time, sys
 
-          # Patch download_file BEFORE any p4a code runs
+          UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          PKGS = ".buildozer/android/platform/build/packages"
+
+          # ---------- 1. Pre-download all packages upfront ----------
+          def pre_download(url, dest, min_size=50000, max_retries=4):
+              """Download with retries, check for HTML responses."""
+              os.makedirs(os.path.dirname(dest), exist_ok=True)
+              for attempt in range(max_retries):
+                  if os.path.exists(dest) and os.path.getsize(dest) >= min_size:
+                      print(f"  [pre] exists: {dest} ({os.path.getsize(dest):,} bytes)")
+                      return True
+                  print(f"  [pre] downloading: {url}")
+                  try:
+                      r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
+                                        allow_redirects=True, stream=True)
+                      r.raise_for_status()
+                      data = b"".join(r.iter_content(chunk_size=65536))
+                      sz = len(data)
+                      ct = r.headers.get("content-type", "")
+                      # Detect HTML redirect pages
+                      if sz < 5000 and data[:1] == b"<":
+                          print(f"  [pre] HTML page received ({sz} bytes) - retry {attempt+1}")
+                          if attempt < max_retries-1:
+                              time.sleep(2**attempt)
+                              continue
+                          else:
+                              print(f"  [pre] FAILED - HTML page from {url}")
+                              return False
+                      with open(dest, 'wb') as f:
+                          f.write(data)
+                      print(f"  [pre] saved {dest} = {sz:,} bytes")
+                      return sz >= min_size
+                  except Exception as e:
+                      print(f"  [pre] retry {attempt+1}/{max_retries}: {e}")
+                      if attempt < max_retries-1:
+                          time.sleep(2**attempt)
+              return False
+
+          def pre_ensure(url, dest, min_size=50000):
+              if not pre_download(url, dest, min_size):
+                  print(f"[pre-ERROR] Could not download: {url}")
+                  sys.exit(1)
+
+          # freetype
+          pre_ensure(
+              "https://downloads.sourceforge.net/project/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz",
+              f"{PKGS}/freetype/freetype-2.10.1.tar.gz"
+          )
+
+          # sdl2_ttf
+          pre_ensure(
+              "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz",
+              f"{PKGS}/sdl2_ttf/sdl2_ttf-2.0.15.tar.gz"
+          )
+
+          # libpng
+          pre_ensure(
+              "https://sourceforge.net/projects/libpng/files/libpng16/1.6.37/libpng-1.6.37.tar.gz",
+              f"{PKGS}/libpng/v1.6.37.tar.gz"
+          )
+
+          print("\n=== Pre-downloaded packages ===")
+          for root, dirs, files in os.walk(PKGS):
+              for f in sorted(files):
+                  if f.endswith(('.tar.gz', '.zip', '.tar.xz')):
+                      p = os.path.join(root, f)
+                      print(f"  {p}  {os.path.getsize(p):,} bytes")
+
+          # ---------- 2. Patch p4a's download_file ----------
           _orig = p4a_r.Recipe.download_file
           def patched_download_file(self, url, filename, cwd=None, retry=True, chunk_size=8192):
               if cwd:
@@ -165,29 +163,29 @@ jobs:
               if dn:
                   p4a_u.ensure_dir(dn)
               if os.path.exists(filename) and os.path.getsize(filename) > 10000:
-                  print(f"  [p4a-patch] exists, skip: {filename}")
+                  print(f"  [patch] exists, skip: {filename}")
                   return
-              print(f"  [p4a-patch] downloading: {url}")
-              UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+              print(f"  [patch] downloading: {url}")
               for attempt in range(5):
                   try:
-                      r = requests.get(url, headers={"User-Agent": UA}, timeout=120, allow_redirects=True, stream=True)
+                      r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
+                                        allow_redirects=True, stream=True)
                       r.raise_for_status()
                       data = b"".join(r.iter_content(chunk_size=chunk_size*8))
                       with open(filename, "wb") as f:
                           f.write(data)
-                      print(f"  [p4a-patch OK] {filename} = {len(data):,} bytes")
+                      print(f"  [patch OK] {filename} = {len(data):,} bytes")
                       return
                   except Exception as e:
-                      print(f"  [p4a-patch retry {attempt+1}/5] {e}")
+                      print(f"  [patch retry {attempt+1}/5] {e}")
                       if attempt < 4:
                           time.sleep(2**attempt)
-              print("[p4a-patch] fallback to urllib")
+              print("[patch] fallback to urllib")
               _orig(self, url, filename, cwd=cwd)
           p4a_r.Recipe.download_file = patched_download_file
-          print("[p4a-patch] patched, now running toolchain...")
+          print("\n[p4a-patch] patched successfully, now running toolchain...")
 
-          # Now run the toolchain
+          # ---------- 3. Run p4a toolchain ----------
           sys.argv = [
               "toolchain.py",
               "create",
