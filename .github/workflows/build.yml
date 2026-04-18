@@ -44,11 +44,6 @@ jobs:
             openjdk-17-jdk \
             unzip \
             zip \
-            autoconf \
-            automake \
-            libtool \
-            libtool-bin \
-            aclocal \
             pkg-config \
             tcl \
             tk \
