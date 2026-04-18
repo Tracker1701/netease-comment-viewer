@@ -59,17 +59,28 @@ jobs:
           unzip -q cmdline-tools.zip
           mv cmdline-tools latest
           rm cmdline-tools.zip
+          # 同时创建 buildozer 期望的旧路径软链接
+          mkdir -p ~/android-sdk/tools/bin
+          ln -sf ~/android-sdk/cmdline-tools/latest/bin/sdkmanager ~/android-sdk/tools/bin/sdkmanager 2>/dev/null || true
           echo "ANDROID_HOME=/home/runner/android-sdk" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=/home/runner/android-sdk" >> $GITHUB_ENV
           echo "PATH=/home/runner/android-sdk/cmdline-tools/latest/bin:/home/runner/android-sdk/platform-tools:$PATH" >> $GITHUB_ENV
-          echo "=== ANDROID_HOME ==="
-          echo $ANDROID_HOME
+          echo "=== SDK structure ==="
+          ls ~/android-sdk/
 
       - name: Accept Android SDK licenses
         run: |
           export ANDROID_HOME=/home/runner/android-sdk
           export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+          # 创建 buildozer 期望的路径（tools/bin/sdkmanager）软链接
+          mkdir -p $ANDROID_HOME/tools/bin
+          ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager $ANDROID_HOME/tools/bin/sdkmanager
+          ln -sf $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager $ANDROID_HOME/tools/bin/sdkmanager 2>/dev/null || true
+          # 接受所有协议
           yes | sdkmanager --licenses 2>/dev/null || true
+          echo "=== SDK tools structure ==="
+          find $ANDROID_HOME/tools -type f 2>/dev/null | head -10
+          echo ""
           echo "=== License files ==="
           ls -la ~/.android/ 2>/dev/null || echo "No .android dir"
 
