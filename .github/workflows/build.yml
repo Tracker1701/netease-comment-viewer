@@ -91,6 +91,15 @@ jobs:
           echo "=== p4a contents ==="
           ls $P4A_DIR/
 
+      - name: Download source packages first
+        run: |
+          # 先单独下载所有源码包，避免构建时找不到 tar.gz
+          python3 -m pythonforandroid.toolchain download \
+            --requirements=python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3 \
+            2>&1
+          echo "=== downloaded packages ==="
+          ls .buildozer/android/platform/build/packages/ 2>/dev/null || echo "no packages dir"
+
       - name: Build APK using p4a directly (avoids autoreconf issue)
         run: |
           # 使用 pip 安装的 python-for-android 直接构建 APK
