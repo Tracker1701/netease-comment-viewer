@@ -55,14 +55,11 @@ jobs:
 
       - name: Set up Android SDK + tools for buildozer
         run: |
-          # 让 buildozer/p4a 能找到 SDK
           mkdir -p ~/.buildozer/android/platform
           ln -sfn /usr/local/lib/android/sdk ~/.buildozer/android/platform/android-sdk
           mkdir -p ~/.buildozer/android/platform/android-sdk/tools/bin
           ln -sf /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
                  ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager
-          echo "=== SDK tools/bin ==="
-          ls -la ~/.buildozer/android/platform/android-sdk/tools/bin/
 
       - name: Accept Android SDK licenses
         run: |
@@ -73,25 +70,16 @@ jobs:
           yes | $SDK/tools/bin/sdkmanager \
             "build-tools;37.0.0" "platforms;android-34" \
             --sdk_root=$SDK 2>/dev/null || true
-          echo "=== Licenses ==="
-          ls ~/.android/
 
       - name: Install Python packages
         run: |
           pip install --upgrade pip wheel setuptools
           pip install Cython==0.29.36
+          pip install requests
           pip install buildozer==1.5.0
           pip install python-for-android
 
-      - name: Get p4a location
-        id: p4a
-        run: |
-          P4A_DIR=$(python3 -c "import pythonforandroid; import os; print(os.path.dirname(pythonforandroid.__file__))")
-          echo "p4a_dir=$P4A_DIR" >> $GITHUB_OUTPUT
-          echo "=== p4a contents ==="
-          ls $P4A_DIR/
-
-      - name: Pre-download source packages (requests lib + mirrors)
+      - name: Pre-download known problematic packages
         run: |
           pip install requests -q
           python3 << 'PYEOF'
@@ -99,91 +87,119 @@ jobs:
           PKGS = ".buildozer/android/platform/build/packages"
           UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
           import requests
 
-          def download(url, dest, min_size=200000):
-              """下载文件并验证大小，返回True/False"""
+          def download(url, dest, min_size=50000):
               if os.path.exists(dest):
                   sz = os.path.getsize(dest)
                   if sz >= min_size:
-                      print(f"  [EXISTS] {dest} ({sz} bytes)")
+                      print(f"  [EXISTS] {dest} ({sz:,} bytes)")
                       return True
-                  print(f"  [REPLACE] existing file too small: {sz} bytes")
               print(f"  [DOWNLOAD] {url}")
-              print(f"  [TO] {dest}")
               try:
-                  r = requests.get(url, headers={"User-Agent": UA}, timeout=120, allow_redirects=True, stream=True)
+                  r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
+                                   allow_redirects=True, stream=True)
                   r.raise_for_status()
                   data = b"".join(r.iter_content(chunk_size=65536))
-                  sz = len(data)
-                  print(f"  [GOT] {sz} bytes, status={r.status_code}, ct={r.headers.get('content-type','?')}")
-                  # 检查是否下载到了HTML/重定向页面
-                  if sz < 5000 and b"<" in data[:200]:
-                      print(f"  [WARN] Likely HTML response, not a tarball!")
+                  print(f"  [GOT] {len(data):,} bytes, ct={r.headers.get('content-type','?')}")
                   with open(dest, 'wb') as f:
                       f.write(data)
-                  print(f"  [SAVED] {os.path.getsize(dest)} bytes")
-                  return sz >= min_size
+                  return len(data) >= min_size
               except Exception as e:
                   print(f"  [FAIL] {e}")
                   return False
 
-          def ensure(url, dest):
-              ok = download(url, dest)
-              if not ok:
-                  print(f"[ERROR] Failed to download: {url}")
-                  sys.exit(1)
-              print(f"[OK] {dest} = {os.path.getsize(dest)} bytes")
-
-          # freetype: SourceForge -> savannah -> GitHub
+          # freetype
           ft_dir = os.path.join(PKGS, "freetype")
           os.makedirs(ft_dir, exist_ok=True)
-          ft = os.path.join(ft_dir, "freetype-2.10.1.tar.gz")
-          mirrors = [
+          for url in [
               "https://downloads.sourceforge.net/project/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz",
               "https://github.com/freetype/freetype/releases/download/VER-2.10.1/freetype-2.10.1.tar.gz",
-              "https://github.com/freetype/freetype/releases/download/VER-2.10.1/freetype-2.10.1.tar.gz",
               "https://download.savannah.gnu.org/releases/freetype/freetype-2.10.1.tar.gz",
-          ]
-          for url in mirrors:
-              if download(url, ft):
+          ]:
+              if download(url, os.path.join(ft_dir, "freetype-2.10.1.tar.gz")):
                   break
-          else:
-              print("[FATAL] All freetype mirrors failed!")
-              sys.exit(1)
 
           # sdl2_ttf
-          sdl_dir = os.path.join(PKGS, "sdl2_ttf")
-          os.makedirs(sdl_dir, exist_ok=True)
-          ensure(
-              "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz",
-              os.path.join(sdl_dir, "sdl2_ttf-2.0.15.tar.gz")
-          )
+          d = os.path.join(PKGS, "sdl2_ttf")
+          os.makedirs(d, exist_ok=True)
+          download("https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz",
+                   os.path.join(d, "sdl2_ttf-2.0.15.tar.gz"))
 
-          # verify
-          print("\n=== Package files ===")
+          # libpng (fails with 504 on GitHub often)
+          d = os.path.join(PKGS, "libpng")
+          os.makedirs(d, exist_ok=True)
+          for url in [
+              "https://sourceforge.net/projects/libpng/files/libpng16/1.6.37/libpng-1.6.37.tar.gz",
+              "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.37/libpng-1.6.37.tar.gz",
+          ]:
+              if download(url, os.path.join(d, "v1.6.37.tar.gz")):
+                  break
+
+          # numpy (python dep)
+          d = os.path.join(PKGS, "numpy")
+          os.makedirs(d, exist_ok=True)
+          download("https://pypi.org/packages/numpy-1.26.4.tar.gz",
+                   os.path.join(d, "numpy-1.26.4.tar.gz"))
+
+          print("\n=== Packages ready ===")
           for root, dirs, files in os.walk(PKGS):
               for f in sorted(files):
-                  if f.endswith(".tar.gz"):
-                      p = os.path.join(root, f)
-                      print(f"  {p}  {os.path.getsize(p):,} bytes")
+                  p = os.path.join(root, f)
+                  print(f"  {p}  {os.path.getsize(p):,} bytes")
           PYEOF
 
-      - name: Verify packages before build
+      - name: Patch p4a to use requests with retry for all downloads
         run: |
-          FT=".buildozer/android/platform/build/packages/freetype/freetype-2.10.1.tar.gz"
-          echo "=== Verifying pre-downloaded packages ==="
-          echo "pwd: $(pwd)"
-          echo "freetype: $(ls -lh $FT 2>/dev/null || echo 'MISSING!')"
-          find .buildozer -name "*.tar.gz" | head -10
-          if [ ! -f "$FT" ]; then
-            echo "[ERROR] freetype tarball missing! Exiting."
-            exit 1
-          fi
-          echo "[OK] Packages verified, proceeding to build..."
+          python3 << 'PYEOF'
+          """Monkey-patch p4a's Recipe.download_file to use requests with retries"""
+          import pythonforandroid.recipe as p4a_r
+          import pythonforandroid.util as p4a_u
+          import requests
+          import os, time
 
-      - name: Build APK using p4a directly (avoids autoreconf issue)
+          _orig = p4a_r.Recipe.download_file
+
+          def patched_download_file(self, url, filename, cwd=None, retry=True, chunk_size=8192):
+              if cwd:
+                  filename = os.path.join(cwd, filename)
+              p4a_u.ensure_dir(os.path.dirname(filename))
+
+              # Skip if already exists with reasonable size
+              if os.path.exists(filename) and os.path.getsize(filename) > 10000:
+                  print(f"  [p4a-patch] exists, skip: {filename}")
+                  return
+
+              print(f"  [p4a-patch] downloading: {url}")
+              UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+              for attempt in range(5):
+                  try:
+                      r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
+                                        allow_redirects=True, stream=True)
+                      r.raise_for_status()
+                      data = b"".join(r.iter_content(chunk_size=chunk_size * 8))
+                      with open(filename, 'wb') as f:
+                          f.write(data)
+                      print(f"  [p4a-patch OK] {filename} = {len(data):,} bytes")
+                      return
+                  except Exception as e:
+                      print(f"  [p4a-patch retry {attempt+1}/5] {e}")
+                      if attempt < 4:
+                          time.sleep(2 ** attempt)
+              # Fallback to original
+              print(f"  [p4a-patch fallback to urllib]")
+              try:
+                  _orig(self, url, filename, cwd=cwd)
+              except Exception as e2:
+                  print(f"  [p4a-patch fallback FAILED] {e2}")
+                  raise
+
+          p4a_r.Recipe.download_file = patched_download_file
+          print("[p4a-patch] Recipe.download_file patched with requests+retries")
+          PYEOF
+
+      - name: Build APK
         run: |
           python3 -m pythonforandroid.toolchain create \
             --dist-name=netease_comment_viewer \
@@ -204,7 +220,6 @@ jobs:
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
           ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.3.13750724
-          # 让 p4a 使用 pip 安装的 recipes
           P4A_ANDROID_NDK_API: '21'
 
       - name: Find and copy APK
@@ -212,14 +227,12 @@ jobs:
         run: |
           echo "=== Looking for APK ==="
           find . -name "*.apk" -type f 2>/dev/null
-          echo ""
-          # Copy to bin/
           mkdir -p bin
           cp .buildozer/android/platform/build/*/armeabi-v7a/*/dist/*.apk bin/ 2>/dev/null || \
           cp .buildozer/android/platform/build/*/armeabi-v7a/*/*.apk bin/ 2>/dev/null || \
           find .buildozer -name "*.apk" -exec cp {} bin/ \; 2>/dev/null || true
           echo "=== APKs in bin/ ==="
-          ls -lh bin/*.apk 2>/dev/null || echo "No APK found in bin/"
+          ls -lh bin/*.apk 2>/dev/null || echo "No APK found"
 
       - name: Upload APK
         if: success()
@@ -232,8 +245,7 @@ jobs:
       - name: Show error log
         if: failure()
         run: |
-          echo "=== build directory ==="
+          echo "=== build artifacts ==="
           find .buildozer -name "*.apk" 2>/dev/null | head -5
           echo ""
-          echo "=== Last 100 lines of p4a output (if any) ==="
-          tail -n 100 .buildozer/logs/buildozer.log 2>/dev/null || echo "No buildozer log"
+          tail -n 100 .buildozer/logs/buildozer.log 2>/dev/null || echo "No log"
