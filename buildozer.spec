@@ -49,9 +49,6 @@ android.archs = arm64-v8a, armeabi-v7a
 # 打包方式
 fullscreen = 0
 
-# NDK 版本（与 runner 预装版本一致）
-android.ndk_path = /usr/local/lib/android/sdk/ndk/27.3.13750724
-
 [pyaes]
 
 [shepherd]
