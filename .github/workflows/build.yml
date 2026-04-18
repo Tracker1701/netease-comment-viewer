@@ -20,14 +20,6 @@ jobs:
         with:
           python-version: '3.10.x'
 
-      - name: Set up Android SDK
-        uses: androidsquare/android-sdk-add-actions@v1
-        with:
-          api-level: 34
-          build-tools: '33.0.2'
-          accept-licenses: 'yes'
-          accept-android-sdk-licenses: 'yes'
-
       - name: Install system dependencies
         run: |
           sudo apt update
@@ -55,9 +47,29 @@ jobs:
             autoconf \
             libtool \
             pkg-config \
-            zlib1g-dev \
             tcl \
-            tk
+            tk \
+            wget
+
+      - name: Install Android SDK command-line tools
+        run: |
+          mkdir -p ~/android-sdk/cmdline-tools
+          cd ~/android-sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          mv cmdline-tools latest
+          rm cmdline-tools.zip
+          echo "ANDROID_HOME=~/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=~/android-sdk" >> $GITHUB_ENV
+          echo "PATH=$PATH:~/android-sdk/cmdline-tools/latest/bin:~/android-sdk/platform-tools" >> $GITHUB_ENV
+
+      - name: Accept Android SDK licenses
+        run: |
+          export ANDROID_HOME=~/android-sdk
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
+          yes | sdkmanager --licenses 2>/dev/null || true
+          echo "=== License files ==="
+          ls -la ~/.android/ 2>/dev/null || echo "No .android dir"
 
       - name: Install Python packages
         run: |
@@ -65,33 +77,26 @@ jobs:
           pip install Cython==0.29.36
           pip install buildozer==1.5.0
 
-      - name: Pre-accept Android SDK licenses
+      - name: Configure buildozer
         run: |
-          # 预先接受所有 Android SDK 协议
-          mkdir -p ~/.android
-          touch ~/.android/repositories.cfg
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-          yes | $ANDROID_HOME/tools/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-          chmod -R 777 ~/.android 2>/dev/null || true
-          echo "=== Accepted licenses ==="
-          ls -la ~/.android/
+          mkdir -p ~/.buildozer/android/platform
+          mkdir -p ~/.buildozer/android/sdk
+          mkdir -p ~/.buildozer/android/ndk
+          # Point buildozer to our SDK
+          echo "[buildozer]" >> buildozer.spec
+          echo "android.sdk_path = $HOME/android-sdk" >> buildozer.spec
 
       - name: Build debug APK
         run: |
           buildozer android debug --verbose=2
         env:
           BUILDZERP_VERBOSE: 2
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
 
       - name: Show output
         if: success()
         run: |
           echo "=== APK files ==="
           ls -lh bin/*.apk 2>/dev/null || echo "No APK found"
-          echo ""
-          echo "=== bin/ contents ==="
-          ls -la bin/ 2>/dev/null || echo "No bin/ directory"
 
       - name: Upload APK
         if: success()
@@ -104,5 +109,5 @@ jobs:
       - name: Show error log
         if: failure()
         run: |
-          echo "=== Buildozer log ==="
-          cat .buildozer/logs/buildozer.log 2>/dev/null | tail -n 80 || echo "No buildozer log"
+          echo "=== Buildozer log (last 80 lines) ==="
+          tail -n 80 .buildozer/logs/buildozer.log 2>/dev/null || echo "No buildozer log"
