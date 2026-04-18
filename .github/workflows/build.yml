@@ -59,13 +59,15 @@ jobs:
           unzip -q cmdline-tools.zip
           mv cmdline-tools latest
           rm cmdline-tools.zip
-          echo "ANDROID_HOME=~/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=~/android-sdk" >> $GITHUB_ENV
-          echo "PATH=$PATH:~/android-sdk/cmdline-tools/latest/bin:~/android-sdk/platform-tools" >> $GITHUB_ENV
+          echo "ANDROID_HOME=/home/runner/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=/home/runner/android-sdk" >> $GITHUB_ENV
+          echo "PATH=/home/runner/android-sdk/cmdline-tools/latest/bin:/home/runner/android-sdk/platform-tools:$PATH" >> $GITHUB_ENV
+          echo "=== ANDROID_HOME ==="
+          echo $ANDROID_HOME
 
       - name: Accept Android SDK licenses
         run: |
-          export ANDROID_HOME=~/android-sdk
+          export ANDROID_HOME=/home/runner/android-sdk
           export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin
           yes | sdkmanager --licenses 2>/dev/null || true
           echo "=== License files ==="
@@ -77,14 +79,15 @@ jobs:
           pip install Cython==0.29.36
           pip install buildozer==1.5.0
 
-      - name: Configure buildozer
+      - name: Prepare buildozer directories
         run: |
           mkdir -p ~/.buildozer/android/platform
           mkdir -p ~/.buildozer/android/sdk
           mkdir -p ~/.buildozer/android/ndk
-          # Point buildozer to our SDK
-          echo "[buildozer]" >> buildozer.spec
-          echo "android.sdk_path = $HOME/android-sdk" >> buildozer.spec
+          echo "=== buildozer.spec tail ==="
+          tail -5 buildozer.spec
+
+
 
       - name: Build debug APK
         run: |

@@ -49,6 +49,9 @@ android.archs = arm64-v8a, armeabi-v7a
 # 打包方式
 fullscreen = 0
 
+# Android SDK 路径（GitHub Actions 使用 /home/runner/android-sdk）
+android.sdk_path = /home/runner/android-sdk
+
 [pyaes]
 
 [shepherd]
