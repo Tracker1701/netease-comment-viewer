@@ -159,6 +159,13 @@ jobs:
               url = getattr(self, "url", None) or self.versioned_url
               if not url:
                   return
+              # Derive filename from the URL basename (not all recipes have self.filename).
+              import posixpath as _pp
+              filename = _pp.basename(url.split("?")[0])
+              # Resolve version placeholders in filename so route_mirrors can match.
+              versioned_filename = self.get_versioned_filename(filename)
+              if versioned_filename != filename:
+                  filename = versioned_filename
               # Determine where the recipe stores its downloaded files.
               pkg_dir = getattr(self.ctx, "packages_path", None)
               if pkg_dir:
@@ -168,10 +175,10 @@ jobs:
               # Check mark file in the correct package directory (not cwd).
               if pkg_dir and os.path.exists(pkg_dir):
                   import glob as _glob
-                  pattern = os.path.join(pkg_dir, f".mark-{self.filename}")
+                  pattern = os.path.join(pkg_dir, f".mark-{filename}")
                   marks = _glob.glob(pattern) if "*" in pattern else ([pattern] if os.path.exists(pattern) else [])
                   if marks:
-                      print(f"  [patch-skip download_if_necessary] {self.filename} (mark exists in {pkg_dir})")
+                      print(f"  [patch-skip din] {filename} (mark exists in {pkg_dir})")
                       return
               # Not cached — do the download with mirror routing.
               # route_mirrors returns [original_url, mirror1, ...] for blocked domains.
@@ -182,7 +189,7 @@ jobs:
                   for attempt in range(5):
                       try:
                           # Write directly to the correct package directory.
-                          target = os.path.join(pkg_dir, self.filename)
+                          target = os.path.join(pkg_dir, filename)
                           p4a_u.ensure_dir(pkg_dir)
                           r = requests.get(u, headers={"User-Agent": UA}, timeout=120,
                                             allow_redirects=True, stream=True)
@@ -200,7 +207,7 @@ jobs:
                           # Write .mark and sync to guarantee p4a sees it.
                           open(target + ".mark", "w").close()
                           os.sync()
-                          print(f"  [patch-dl OK] {self.filename} = {len(data):,}B")
+                          print(f"  [patch-dl OK] {filename} = {len(data):,}B")
                           return
                       except requests.exceptions.RequestException as e:
                           last_err = e
