@@ -79,7 +79,7 @@ jobs:
           pip install buildozer==1.5.0
           pip install python-for-android
 
-      - name: Build APK - download + patch + compile all in one wrapper
+      - name: Build APK - patch download + run toolchain
         run: |
           cat > /tmp/p4a_build.py << 'PYEOF'
           import pythonforandroid.recipe as p4a_r
@@ -87,114 +87,47 @@ jobs:
           import requests, os, time, sys
 
           UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-          PKGS = ".buildozer/android/platform/build/packages"
 
-          # ---------- 0. Mirror map: try multiple sources for each package ----------
-          import urllib.request, urllib.error
-
-          # SourceForge is blocked by GitHub Actions - use mirrors
+          # SourceForge is blocked by GitHub Actions.
+          # Map blocked SourceForge domains → alternative mirrors.
+          # IMPORTANT: Use distribution tarball URLs only. GitHub archive URLs
+          # (github.com/*/archive/refs/tags/...) are git repo snapshots and
+          # do NOT contain the proper release tarball with configure scripts.
           MIRROR_GROUPS = {
+              # freetype mirrors (blocked on SourceForge downloads.sourceforge.net)
               "freetype": [
-                  "https://github.com/freetype/freetype/archive/refs/tags/VER-2-10-1.tar.gz",
-                  "https://ftp.acc.umu.se/mirror/freetype.org/freetype/freetype-2.10.1.tar.gz",
-                  "https://sourceforge.mirrorservice.org/f/fe/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz",
+                  "https://download-mirror.savannah.gnu.org/releases/freetype/freetype-2.10.1.tar.gz",
+                  "https://osdn.net/projects/sfnet_freetype/downloads/freetype2/2.10.1/freetype-2.10.1.tar.gz",
+                  "https://ftp.lip6.fr/pub/pcgs/graphics/freetype/freetype-2.10.1.tar.gz",
                   "https://mirrors.kernel.org/gentoo/distfiles/freetype-2.10.1.tar.gz",
+                  "https://mirror.koddos.net/pub/software/graphics/freetype/freetype-2.10.1.tar.gz",
               ],
-              "sdl2_ttf": [
-                  "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz",
-                  "https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.0.15/SDL2_ttf-2.0.15.tar.gz",
-              ],
+              # libpng mirrors (blocked on sourceforge.net/projects/libpng)
               "libpng": [
-                  # git archive (works even without formal release)
-                  "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.37.tar.gz",
-                  # glennrp redirects to pnggroup, but no formal release → use git archive
-                  "https://github.com/glennrp/libpng/archive/v1.6.37.tar.gz",
-                  # try .tar.xz too
-                  "https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.37.tar.xz",
-                  # fallback mirrors
+                  "https://osdn.net/projects/sfnet_libpng/downloads/libpng16/1.6.37/libpng-1.6.37.tar.gz",
                   "https://mirror.koddos.net/pub/software/graphics/libpng/libpng-1.6.37.tar.gz",
-                  "http://libpng.org/pub/png/libpng-1.6.37.tar.gz",
-                  "https://ftp.lip6.fr/pub/pcgs/graphics/png/src/libpng-1.6.37.tar.gz",
-                  "http://libpng.org/files/pub/png/libpng-1.6.37.tar.gz",
+                  "https://ftp.lip6.fr/pub/pcgs/graphics/png/libpng-1.6.37.tar.gz",
+                  "https://www.ibiblio.org/pub/packages/graphics/libpng/libpng-1.6.37.tar.gz",
               ],
           }
 
-          def multi_source_download(urls, dest, min_size=50000, max_retries=4):
-              """Try each URL in order, use requests with retry on HTTP errors."""
-              os.makedirs(os.path.dirname(dest), exist_ok=True)
-              for url in urls:
-                  for attempt in range(max_retries):
-                      if os.path.exists(dest) and os.path.getsize(dest) >= min_size:
-                          print(f"  [multi] exists: {dest} ({os.path.getsize(dest):,} bytes)")
-                          return True
-                      print(f"  [multi] trying: {url}")
-                      try:
-                          r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
-                                            allow_redirects=True, stream=True)
-                          r.raise_for_status()
-                          data = b"".join(r.iter_content(chunk_size=65536))
-                          sz = len(data)
-                          if sz < 5000 and data[:1] == b"<":
-                              print(f"  [multi] HTML page ({sz}B), next mirror...")
-                              break  # try next URL
-                          if sz < min_size:
-                              print(f"  [multi] too small ({sz}B), next mirror...")
-                              break
-                          with open(dest, 'wb') as f:
-                              f.write(data)
-                          print(f"  [multi] SUCCESS: {dest} = {sz:,} bytes (from {url})")
-                          return True
-                      except Exception as e:
-                          print(f"  [multi] retry {attempt+1}/{max_retries}: {e}")
-                          if attempt < max_retries-1:
-                              time.sleep(2**attempt)
-                  print(f"  [multi] all retries exhausted for {url}, trying next mirror...")
-              return False
-
-          def pre_ensure(key, dest, min_size=50000):
-              urls = MIRROR_GROUPS.get(key, [])
-              if not urls:
-                  print(f"[pre-ERROR] No mirrors defined for key: {key}")
-                  sys.exit(1)
-              if not multi_source_download(urls, dest, min_size):
-                  print(f"[pre-ERROR] Could not download {key} from any mirror")
-                  sys.exit(1)
-
-          # freetype
-          pre_ensure("freetype",
-              f"{PKGS}/freetype/freetype-2.10.1.tar.gz")
-
-          # sdl2_ttf
-          pre_ensure("sdl2_ttf",
-              f"{PKGS}/sdl2_ttf/sdl2_ttf-2.0.15.tar.gz")
-
-          # libpng
-          pre_ensure("libpng",
-              f"{PKGS}/libpng/v1.6.37.tar.gz")
-
-          print("\n=== Pre-downloaded packages ===")
-          for root, dirs, files in os.walk(PKGS):
-              for f in sorted(files):
-                  if f.endswith(('.tar.gz', '.zip', '.tar.xz')):
-                      p = os.path.join(root, f)
-                      print(f"  {p}  {os.path.getsize(p):,} bytes")
-
-          # SourceForge domain aliases for mirror routing
-          SF_KEYS = {
+          SF_DOMAINS = {
               "downloads.sourceforge.net/project/freetype":  "freetype",
               "sourceforge.net/projects/libpng":             "libpng",
               "downloads.sourceforge.net/project/libpng":   "libpng",
+              "sourceforge.net/projects/freetype":          "freetype",
           }
 
-          def route_mirror(url):
-              """Return a list of URLs to try: original first, then mirrors."""
-              out = [url]
-              for domain, key in SF_KEYS.items():
+          def route_mirrors(url):
+              """Return [original_url, mirror1, mirror2, ...] for SourceForge URLs."""
+              mirrors = [url]
+              for domain, key in SF_DOMAINS.items():
                   if domain in url and key in MIRROR_GROUPS:
-                      out += MIRROR_GROUPS[key]
-              return out
+                      mirrors += MIRROR_GROUPS[key]
+                      break
+              return mirrors
 
-          # ---------- 2. Patch p4a's download_file ----------
+          # ---------- Patch p4a's download_file with retry + mirror fallback ----------
           _orig = p4a_r.Recipe.download_file
           def patched_download_file(self, url, filename, cwd=None, retry=True, chunk_size=8192):
               if cwd:
@@ -203,11 +136,11 @@ jobs:
               if dn:
                   p4a_u.ensure_dir(dn)
               if os.path.exists(filename) and os.path.getsize(filename) > 10000:
-                  print(f"  [patch] exists, skip: {filename}")
+                  print(f"  [patch] exists: {os.path.basename(filename)}")
                   return
-              urls_to_try = route_mirror(url)
-              for u in urls_to_try:
-                  print(f"  [patch] trying: {u}")
+              urls = route_mirrors(url)
+              for u in urls:
+                  print(f"  [patch] {u[:80]}...")
                   for attempt in range(5):
                       try:
                           r = requests.get(u, headers={"User-Agent": UA}, timeout=120,
@@ -215,18 +148,18 @@ jobs:
                           r.raise_for_status()
                           data = b"".join(r.iter_content(chunk_size=chunk_size*8))
                           if len(data) < 5000 and data[:1] == b"<":
-                              print(f"  [patch] HTML page ({len(data)}B) - next mirror")
-                              break  # try next URL in route_mirror list
+                              print(f"  [patch] HTML page, trying next...")
+                              break
                           with open(filename, "wb") as f:
                               f.write(data)
-                          print(f"  [patch OK] {filename} = {len(data):,} bytes (from {u})")
+                          print(f"  [patch OK] {os.path.basename(filename)} = {len(data):,}B")
                           return
                       except Exception as e:
                           print(f"  [patch retry {attempt+1}/5] {e}")
                           if attempt < 4:
                               time.sleep(2**attempt)
-                  print(f"  [patch] exhausted for {u}, trying next...")
-              print("[patch] all mirrors failed, fallback to urllib")
+                  print(f"  [patch] all retries for {u[:60]}, trying next mirror...")
+              print("[patch] mirrors exhausted, fallback to urllib")
               _orig(self, url, filename, cwd=cwd)
           p4a_r.Recipe.download_file = patched_download_file
           print("\n[p4a-patch] patched successfully, now running toolchain...")
