@@ -169,6 +169,19 @@ jobs:
                       print(f"  {p}  {os.path.getsize(p):,} bytes")
           PYEOF
 
+      - name: Verify packages before build
+        run: |
+          FT=".buildozer/android/platform/build/packages/freetype/freetype-2.10.1.tar.gz"
+          echo "=== Verifying pre-downloaded packages ==="
+          echo "pwd: $(pwd)"
+          echo "freetype: $(ls -lh $FT 2>/dev/null || echo 'MISSING!')"
+          find .buildozer -name "*.tar.gz" | head -10
+          if [ ! -f "$FT" ]; then
+            echo "[ERROR] freetype tarball missing! Exiting."
+            exit 1
+          fi
+          echo "[OK] Packages verified, proceeding to build..."
+
       - name: Build APK using p4a directly (avoids autoreconf issue)
         run: |
           python3 -m pythonforandroid.toolchain create \
