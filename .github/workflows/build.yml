@@ -88,13 +88,13 @@ jobs:
 
           UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-          # SourceForge is blocked by GitHub Actions.
-          # Map blocked SourceForge domains → alternative mirrors.
+          # SourceForge and Savannah are blocked by GitHub Actions.
           # IMPORTANT: Use distribution tarball URLs only. GitHub archive URLs
           # (github.com/*/archive/refs/tags/...) are git repo snapshots and
           # do NOT contain the proper release tarball with configure scripts.
+
           MIRROR_GROUPS = {
-              # freetype mirrors (blocked on SourceForge downloads.sourceforge.net)
+              # freetype: blocked on download.savannah.gnu.org AND downloads.sourceforge.net
               "freetype": [
                   "https://download-mirror.savannah.gnu.org/releases/freetype/freetype-2.10.1.tar.gz",
                   "https://osdn.net/projects/sfnet_freetype/downloads/freetype2/2.10.1/freetype-2.10.1.tar.gz",
@@ -102,7 +102,7 @@ jobs:
                   "https://mirrors.kernel.org/gentoo/distfiles/freetype-2.10.1.tar.gz",
                   "https://mirror.koddos.net/pub/software/graphics/freetype/freetype-2.10.1.tar.gz",
               ],
-              # libpng mirrors (blocked on sourceforge.net/projects/libpng)
+              # libpng: blocked on sourceforge.net/projects/libpng
               "libpng": [
                   "https://osdn.net/projects/sfnet_libpng/downloads/libpng16/1.6.37/libpng-1.6.37.tar.gz",
                   "https://mirror.koddos.net/pub/software/graphics/libpng/libpng-1.6.37.tar.gz",
@@ -116,10 +116,12 @@ jobs:
               "sourceforge.net/projects/libpng":             "libpng",
               "downloads.sourceforge.net/project/libpng":   "libpng",
               "sourceforge.net/projects/freetype":          "freetype",
+              "download.savannah.gnu.org":                   "freetype",
+              "download-mirror.savannah.gnu.org":           "freetype",
           }
 
           def route_mirrors(url):
-              """Return [original_url, mirror1, mirror2, ...] for SourceForge URLs."""
+              """Return [original_url, mirror1, mirror2, ...]."""
               mirrors = [url]
               for domain, key in SF_DOMAINS.items():
                   if domain in url and key in MIRROR_GROUPS:
@@ -127,40 +129,46 @@ jobs:
                       break
               return mirrors
 
-          # ---------- Patch p4a's download_file with retry + mirror fallback ----------
+          # ---------- Patch Recipe.download_file with retry + mirror fallback ----------
+          # The base Recipe.download_file uses urllib (no retry, blocked on GA).
           _orig = p4a_r.Recipe.download_file
-          def patched_download_file(self, url, filename, cwd=None, retry=True, chunk_size=8192):
+          def patched_download_file(self, url, target, cwd=None):
+              if not url:
+                  return
               if cwd:
-                  filename = os.path.join(cwd, filename)
-              dn = os.path.dirname(filename)
+                  target = os.path.join(cwd, target)
+              dn = os.path.dirname(target)
               if dn:
                   p4a_u.ensure_dir(dn)
-              if os.path.exists(filename) and os.path.getsize(filename) > 10000:
-                  print(f"  [patch] exists: {os.path.basename(filename)}")
+              if os.path.exists(target) and os.path.getsize(target) > 10000:
+                  print(f"  [patch] exists: {os.path.basename(target)}")
                   return
               urls = route_mirrors(url)
+              last_err = None
               for u in urls:
-                  print(f"  [patch] {u[:80]}...")
+                  print(f"  [patch] {u[:75]}...")
                   for attempt in range(5):
                       try:
                           r = requests.get(u, headers={"User-Agent": UA}, timeout=120,
                                             allow_redirects=True, stream=True)
                           r.raise_for_status()
-                          data = b"".join(r.iter_content(chunk_size=chunk_size*8))
+                          data = b"".join(r.iter_content(chunk_size=65536))
                           if len(data) < 5000 and data[:1] == b"<":
-                              print(f"  [patch] HTML page, trying next...")
+                              print(f"  [patch] HTML page, next mirror...")
                               break
-                          with open(filename, "wb") as f:
+                          with open(target, "wb") as f:
                               f.write(data)
-                          print(f"  [patch OK] {os.path.basename(filename)} = {len(data):,}B")
+                          print(f"  [patch OK] {os.path.basename(target)} = {len(data):,}B")
                           return
-                      except Exception as e:
+                      except requests.exceptions.RequestException as e:
+                          last_err = e
                           print(f"  [patch retry {attempt+1}/5] {e}")
                           if attempt < 4:
                               time.sleep(2**attempt)
-                  print(f"  [patch] all retries for {u[:60]}, trying next mirror...")
-              print("[patch] mirrors exhausted, fallback to urllib")
-              _orig(self, url, filename, cwd=cwd)
+                  print(f"  [patch] exhausted, trying next mirror...")
+              # All mirrors failed - re-raise so the build stops (don't silently continue)
+              if last_err:
+                  raise last_err
           p4a_r.Recipe.download_file = patched_download_file
           print("\n[p4a-patch] patched successfully, now running toolchain...")
 
