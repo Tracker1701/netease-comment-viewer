@@ -161,7 +161,9 @@ jobs:
           def patched_download_file(self, url, filename, cwd=None, retry=True, chunk_size=8192):
               if cwd:
                   filename = os.path.join(cwd, filename)
-              p4a_u.ensure_dir(os.path.dirname(filename))
+              dn = os.path.dirname(filename)
+              if dn:
+                  p4a_u.ensure_dir(dn)
               if os.path.exists(filename) and os.path.getsize(filename) > 10000:
                   print(f"  [p4a-patch] exists, skip: {filename}")
                   return
