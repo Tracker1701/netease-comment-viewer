@@ -149,14 +149,12 @@ jobs:
                   print(f"  {p}  {os.path.getsize(p):,} bytes")
           PYEOF
 
-      - name: Patch p4a to use requests with retry for all downloads
+      - name: Patch p4a and build APK (must be in same process!)
         run: |
-          python3 << 'PYEOF'
-          """Monkey-patch p4a's Recipe.download_file to use requests with retries"""
+          python3 -c "
           import pythonforandroid.recipe as p4a_r
           import pythonforandroid.util as p4a_u
-          import requests
-          import os, time
+          import requests, os, time
 
           _orig = p4a_r.Recipe.download_file
 
@@ -164,43 +162,30 @@ jobs:
               if cwd:
                   filename = os.path.join(cwd, filename)
               p4a_u.ensure_dir(os.path.dirname(filename))
-
-              # Skip if already exists with reasonable size
               if os.path.exists(filename) and os.path.getsize(filename) > 10000:
-                  print(f"  [p4a-patch] exists, skip: {filename}")
+                  print(f'  [p4a] exists, skip: {filename}')
                   return
-
-              print(f"  [p4a-patch] downloading: {url}")
-              UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+              print(f'  [p4a] downloading: {url}')
+              UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
               for attempt in range(5):
                   try:
-                      r = requests.get(url, headers={"User-Agent": UA}, timeout=120,
-                                        allow_redirects=True, stream=True)
+                      r = requests.get(url, headers={'User-Agent': UA}, timeout=120, allow_redirects=True, stream=True)
                       r.raise_for_status()
-                      data = b"".join(r.iter_content(chunk_size=chunk_size * 8))
+                      data = b''.join(r.iter_content(chunk_size=chunk_size*8))
                       with open(filename, 'wb') as f:
                           f.write(data)
-                      print(f"  [p4a-patch OK] {filename} = {len(data):,} bytes")
+                      print(f'  [p4a OK] {filename} = {len(data):,} bytes')
                       return
                   except Exception as e:
-                      print(f"  [p4a-patch retry {attempt+1}/5] {e}")
+                      print(f'  [p4a retry {attempt+1}/5] {e}')
                       if attempt < 4:
                           time.sleep(2 ** attempt)
-              # Fallback to original
-              print(f"  [p4a-patch fallback to urllib]")
-              try:
-                  _orig(self, url, filename, cwd=cwd)
-              except Exception as e2:
-                  print(f"  [p4a-patch fallback FAILED] {e2}")
-                  raise
+              print('[p4a] fallback to urllib')
+              _orig(self, url, filename, cwd=cwd)
 
           p4a_r.Recipe.download_file = patched_download_file
-          print("[p4a-patch] Recipe.download_file patched with requests+retries")
-          PYEOF
-
-      - name: Build APK
-        run: |
+          print('[p4a] patched successfully')
+          " && \
           python3 -m pythonforandroid.toolchain create \
             --dist-name=netease_comment_viewer \
             --bootstrap=sdl2 \
