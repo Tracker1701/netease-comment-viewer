@@ -91,36 +91,78 @@ jobs:
           echo "=== p4a contents ==="
           ls $P4A_DIR/
 
-      - name: Pre-download source packages
+      - name: Pre-download source packages (Python, handles redirects)
         run: |
           set -e
           PKGS=".buildozer/android/platform/build/packages"
-          mkdir -p $PKGS/freetype $PKGS/sdl2_ttf $PKGS/hostpython3 $PKGS/python3
+          mkdir -p $PKGS/freetype $PKGS/sdl2_ttf
 
-          # freetype: SourceForge 需要 User-Agent 才能下载
-          FT_DIR="$PKGS/freetype"
-          if [ ! -f "$FT_DIR/freetype-2.10.1.tar.gz" ]; then
-            echo "Downloading freetype-2.10.1.tar.gz..."
-            wget --user-agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
-              -O "$FT_DIR/freetype-2.10.1.tar.gz" \
-              "https://downloads.sourceforge.net/project/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz" \
-              || wget --user-agent="Mozilla/5.0" \
-              -O "$FT_DIR/freetype-2.10.1.tar.gz" \
-              "https://github.com/ArtifexSoftware/freetype-mirror/raw/main/freetype-2.10.1.tar.gz" \
-              || echo "freetype download failed"
-          fi
+          python3 << 'PYEOF'
+          import os, urllib.request, urllib.error
+
+          PKGS = ".buildozer/android/platform/build/packages"
+          UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+          def download(url, dest, min_size=50000):
+              """下载文件，验证大小，成功返回True"""
+              if os.path.exists(dest):
+                  sz = os.path.getsize(dest)
+                  if sz >= min_size:
+                      print(f"  Already exists: {dest} ({sz} bytes)")
+                      return True
+              print(f"  Downloading {url}")
+              print(f"  -> {dest}")
+              req = urllib.request.Request(url, headers={"User-Agent": UA})
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      data = r.read()
+                  with open(dest, 'wb') as f:
+                      f.write(data)
+                  sz = len(data)
+                  print(f"  Downloaded: {sz} bytes")
+                  return sz >= min_size
+              except Exception as e:
+                  print(f"  FAILED: {e}")
+                  return False
+
+          # freetype: try SourceForge first, then savannah mirror
+          ft_dir = os.path.join(PKGS, "freetype")
+          os.makedirs(ft_dir, exist_ok=True)
+          ft_file = os.path.join(ft_dir, "freetype-2.10.1.tar.gz")
+          ok = download(
+              "https://downloads.sourceforge.net/project/freetype/freetype2/2.10.1/freetype-2.10.1.tar.gz",
+              ft_file
+          )
+          if not ok:
+              # Fallback: savannah GNU
+              ok = download(
+                  "https://download.savannah.gnu.org/releases/freetype/freetype-2.10.1.tar.gz",
+                  ft_file
+              )
+          if not ok:
+              # Fallback: GitHub mirror
+              ok = download(
+                  "https://github.com/behdad/freetype/releases/download/v2.10.1/freetype-2.10.1.tar.gz",
+                  ft_file
+              )
+          if not ok:
+              raise RuntimeError(f"Could not download freetype!")
 
           # sdl2_ttf
-          SDL_DIR="$PKGS/sdl2_ttf"
-          if [ ! -f "$SDL_DIR/sdl2_ttf-2.0.15.tar.gz" ]; then
-            echo "Downloading sdl2_ttf-2.0.15..."
-            wget --user-agent="Mozilla/5.0" \
-              -O "$SDL_DIR/sdl2_ttf-2.0.15.tar.gz" \
-              "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz"
-          fi
+          sdl_dir = os.path.join(PKGS, "sdl2_ttf")
+          os.makedirs(sdl_dir, exist_ok=True)
+          download(
+              "https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.15.tar.gz",
+              os.path.join(sdl_dir, "sdl2_ttf-2.0.15.tar.gz")
+          )
 
-          echo "=== Downloaded packages ==="
-          find $PKGS -name "*.tar.gz" -exec ls -lh {} \;
+          print("\n=== Downloaded packages ===")
+          for root, dirs, files in os.walk(PKGS):
+              for f in files:
+                  if f.endswith(".tar.gz"):
+                      p = os.path.join(root, f)
+                      print(f"  {p}  ({os.path.getsize(p)} bytes)")
+          PYEOF
 
       - name: Build APK using p4a directly (avoids autoreconf issue)
         run: |
