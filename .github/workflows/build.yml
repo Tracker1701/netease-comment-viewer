@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:   # 手动触发
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,7 +20,6 @@ jobs:
         with:
           python-version: '3.10.x'
 
-      # ── 安装 Buildozer 依赖 ────────────────────────
       - name: Install system dependencies
         run: |
           sudo apt update
@@ -40,7 +39,8 @@ jobs:
             libssl-dev \
             libffi-dev \
             liblzma-dev \
-            libopenblas-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
             openjdk-17-jdk \
             unzip \
             zip \
@@ -48,42 +48,79 @@ jobs:
             libtool \
             pkg-config \
             zlib1g-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
             tcl \
             tk
 
       - name: Install Python packages
         run: |
-          pip install --upgrade pip
+          pip install --upgrade pip wheel setuptools
+          pip install Cython==0.29.36
           pip install buildozer==1.5.0
-          pip install python-for-android
 
-      # ── 下载 Android SDK/NDK（buildozer 自动下载，这里手动预取以加速） ──
-      - name: Prepare Android SDK
+      - name: Cache Android SDK/NDK
+        uses: actions/cache@v4
+        id: cache-android
+        with:
+          path: |
+            ~/.buildozer/android/platform
+            ~/.buildozer/android/sdk
+            ~/.buildozer/android/ndk
+          key: android-build-tools-${{ runner.os }}
+
+      - name: Debug environment
         run: |
-          mkdir -p ~/.buildozer/android/platform
-          mkdir -p ~/.buildozer/android/sdk
-          mkdir -p ~/.buildozer/android/ndk
+          echo "=== Java version ==="
+          java -version 2>&1
+          echo ""
+          echo "=== JAVA_HOME ==="
+          echo $JAVA_HOME
+          echo ""
+          echo "=== ANDROID_HOME ==="
+          echo $ANDROID_HOME
+          echo ""
+          echo "=== Buildozer version ==="
+          buildozer --version
+          echo ""
+          echo "=== Cython version ==="
+          cython --version
+          echo ""
+          echo "=== Python version ==="
+          python3 --version
+          echo ""
+          echo "=== SDK contents ==="
+          ls ~/.buildozer/android/sdk/ 2>/dev/null || echo "SDK dir empty or missing"
+          echo ""
+          echo "=== NDK contents ==="
+          ls ~/.buildozer/android/ndk/ 2>/dev/null || echo "NDK dir empty or missing"
 
-          # 自动下载 SDK + NDK（如果不存在则 buildozer 自动处理）
-          echo "Buildozer will download SDK/NDK on first run."
-
-      # ── 构建 APK ──────────────────────────────────
       - name: Build debug APK
         run: |
-          buildozer android debug
+          buildozer android debug --verbose=2
         env:
-          BUILDZERP_VERBOSE: 0
+          BUILDZERP_VERBOSE: 2
 
-      # ── 上传产物 ──────────────────────────────────
+      - name: Show output
+        if: success()
+        run: |
+          echo "=== APK files ==="
+          ls -lh bin/*.apk 2>/dev/null || echo "No APK found in bin/"
+          echo ""
+          echo "=== bin/ contents ==="
+          ls -la bin/ 2>/dev/null || echo "No bin/ directory"
+
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: netease-comment-viewer-apk
           path: bin/*.apk
           retention-days: 30
 
-      - name: Show output
+      - name: Show error log
+        if: failure()
         run: |
-          ls -lh bin/
+          echo "=== Buildozer log ==="
+          cat .buildozer/logs/buildozer.log 2>/dev/null || echo "No buildozer log found"
+          echo ""
+          echo "=== Last 100 lines of buildozer log ==="
+          tail -n 100 .buildozer/logs/buildozer.log 2>/dev/null || true
