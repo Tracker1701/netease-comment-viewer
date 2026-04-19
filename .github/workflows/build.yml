@@ -104,12 +104,16 @@ jobs:
             return "$sdk_status"
           }
 
-          run_sdkmanager --licenses
+          # Accept ALL licenses before installing anything
+          yes | "$SDKMANAGER" --sdk_root="${ANDROID_SDK_ROOT}" --licenses || true
           run_sdkmanager \
             "platform-tools" \
             "platforms;android-${ANDROID_API}" \
             "build-tools;34.0.0" \
             "ndk;${ANDROID_NDK_VERSION}"
+
+          # Explicitly accept licenses again in case a package was added after first pass
+          yes | "$SDKMANAGER" --sdk_root="${ANDROID_SDK_ROOT}" --licenses || true
 
           echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"

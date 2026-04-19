@@ -55,6 +55,9 @@ fullscreen = 0
 
 [buildozer]
 
+# Android SDK（CI 用 GitHub Actions 提供的路径）
+android.sdk = /usr/local/lib/android/sdk
+
 # 日志文件
 log_file = buildozer.log
 
