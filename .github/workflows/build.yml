@@ -257,6 +257,7 @@ jobs:
               _orig_dlin = Recipe.download_if_necessary
 
               def _patched_dlin(self, arch=None):
+                  print(f"[patch-dlin ENTER] recipe={getattr(self,'name','?')} url={getattr(self,'url',None)!r} versioned_url={getattr(self,'versioned_url',None)!r}", flush=True)
                   # Git-based recipes (android, kivy) have no url attribute.
                   # Fall through to the original method for those.
                   if not getattr(self, "url", None):
@@ -328,7 +329,7 @@ jobs:
                               # even if p4a's own unpack is skipped (cache hit).
                               # Use globals() for late binding since _patched_unpack
                               # is defined below this function in the source.
-                              print(f"[patch-dl] triggering immediate unpack for {self.name}", flush=True)
+                              print(f"[patch-dl] download OK, triggering immediate unpack for {self.name}", flush=True)
                               try:
                                   _pu = globals().get("_patched_unpack")
                                   if _pu:
@@ -363,6 +364,7 @@ jobs:
               _orig_unpack = Recipe.unpack
 
               def _patched_unpack(self, arch):
+                  print(f"[patch-unpack ENTER] recipe={getattr(self,'name','?')} arch={arch}", flush=True)
                   # Git-based recipes have no url attribute.
                   if not getattr(self, "url", None):
                       return _orig_unpack(self, arch)
