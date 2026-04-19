@@ -333,9 +333,17 @@ jobs:
                   raise last_err
 
               def _patched_unpack(recipe_self, arch):
-                  print(f"[ci-patch-unpack] ENTER recipe={getattr(recipe_self,'name','?')} arch={arch}", flush=True)
+                  recipe_name = getattr(recipe_self, "name", "?")
+                  raw_bd = recipe_self.get_build_dir(arch)
+                  abs_bd = os.path.abspath(raw_bd) if os.path.isabs(raw_bd) else os.path.join(_LAUNCH_DIR, raw_bd)
+                  print(f"[ci-patch-unpack] ENTER recipe={recipe_name} arch={arch} raw_build_dir={raw_bd} abs_build_dir={abs_bd}", flush=True)
+                  if os.path.isdir(abs_bd) and os.listdir(abs_bd):
+                      print(f"[ci-patch-unpack] build_dir already exists and non-empty, skipping: {abs_bd} -> {os.listdir(abs_bd)[:5]}", flush=True)
+                      return
                   if not getattr(recipe_self, "url", None):
+                      print(f"[ci-patch-unpack] no url attr, calling original unpack", flush=True)
                       return _orig_unpack(recipe_self, arch)
+                  print(f"[ci-patch-unpack] calling _do_unpack for {recipe_name}", flush=True)
                   _do_unpack(recipe_self, arch)
 
               Recipe.download_if_necessary = _patched_dlin
@@ -371,6 +379,11 @@ jobs:
           ls -la .github/ci_patch/
           head -3 .github/ci_patch/ci_patch.py
 
+          echo "=== pre-check: png build dirs (both arches) ==="
+          ls -la ~/.local/share/python-for-android/build/other_builds/png/ 2>/dev/null || echo "no png dir in other_builds"
+          echo "---"
+          ls -la ~/.local/share/python-for-android/packages/png/ 2>/dev/null || echo "no png dir in packages"
+
           echo "=== clean dists + wipe build cache ==="
           python -c "import sys; sys.path.insert(0,'.github/ci_patch'); import ci_patch" || true
           python -m pythonforandroid.toolchain clean_dists 2>&1 || true
@@ -388,6 +401,10 @@ jobs:
           # IMPORTANT: import ci_patch BEFORE running p4a toolchain so the patch
           # is installed before p4a's Recipe class is ever referenced.
           python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3','--arch','arm64-v8a','--arch','armeabi-v7a']; main()" 2>&1 | tee buildozer-ci.log
+
+          echo "=== post-build png dir state (armeabi-v7a) ==="
+          find ~/.local/share/python-for-android/build/other_builds/png/ -type f -name "configure" 2>/dev/null || echo "no configure found"
+          find ~/.local/share/python-for-android/build/other_builds/png/ -type d 2>/dev/null | head -20 || echo "no png dirs"
 
           echo "=== search APK after build ==="
           # p4a toolchain.py puts APKs in .buildozer/android/platform/build/dists/{app_name}/bin/
