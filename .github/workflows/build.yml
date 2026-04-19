@@ -257,6 +257,12 @@ jobs:
               _orig_dlin = Recipe.download_if_necessary
 
               def _patched_dlin(self, arch=None):
+                  # Some recipes (e.g. pyjnius) have no versioned_url — they
+                  # get their source via git clone or other non-HTTP means.
+                  # Fall through to the original method for those.
+                  if not getattr(self, "versioned_url", None):
+                      return _orig_dlin(self, arch)
+
                   # Use versioned_url to derive the actual filename to download.
                   # self.versioned_url has {version} already substituted.
                   filename = posixpath.basename(self.versioned_url.split("?")[0])
@@ -341,6 +347,10 @@ jobs:
               _orig_unpack = Recipe.unpack
 
               def _patched_unpack(self, arch):
+                  # Fall back for recipes that don't have a URL-based archive.
+                  if not getattr(self, "versioned_url", None):
+                      return _orig_unpack(self, arch)
+
                   # Build the redirected archive path: packages/{name}/{filename}
                   filename = posixpath.basename(self.versioned_url.split("?")[0])
                   raw_pkg_path = getattr(self.ctx, "packages_path", "packages")
