@@ -47,7 +47,7 @@ jobs:
           set -euxo pipefail
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          ls -la /usr/local/lib/android/sdk || true
+          ls -la "$ANDROID_SDK_ROOT" || true
 
       - name: Install system dependencies
         shell: bash
@@ -89,21 +89,35 @@ jobs:
       - name: Prepare Android SDK / NDK
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          mkdir -p ~/.android
-          touch ~/.android/repositories.cfg
+          mkdir -p "$HOME/.android"
+          touch "$HOME/.android/repositories.cfg"
 
-          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          yes | "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" \
+          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+
+          run_sdkmanager() {
+            set +o pipefail
+            yes | "$SDKMANAGER" --sdk_root="${ANDROID_SDK_ROOT}" "$@" >/dev/null
+            local sdk_status=${PIPESTATUS[1]}
+            set -o pipefail
+            return "$sdk_status"
+          }
+
+          run_sdkmanager --licenses
+          run_sdkmanager \
             "platform-tools" \
             "platforms;android-${ANDROID_API}" \
             "build-tools;34.0.0" \
-            "ndk;${ANDROID_NDK_VERSION}" >/dev/null
+            "ndk;${ANDROID_NDK_VERSION}"
 
           echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
           echo "ANDROIDSDK=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+
+          test -d "${ANDROID_SDK_ROOT}/platforms/android-${ANDROID_API}"
+          test -d "${ANDROID_SDK_ROOT}/build-tools/34.0.0"
+          test -d "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
 
       - name: Install Python packages
         shell: bash
