@@ -323,6 +323,23 @@ jobs:
                                   mf.write(candidate)
                               os.sync()
 
+                              # Immediately unpack after download, before returning.
+                              # This ensures the archive is extracted to other_builds/
+                              # even if p4a's own unpack is skipped (cache hit).
+                              # Use globals() for late binding since _patched_unpack
+                              # is defined below this function in the source.
+                              print(f"[patch-dl] triggering immediate unpack for {self.name}", flush=True)
+                              try:
+                                  _pu = globals().get("_patched_unpack")
+                                  if _pu:
+                                      _pu(self, arch or "arm64-v8a")
+                                  else:
+                                      print(f"[patch-dl] _patched_unpack not yet defined, skipping", flush=True)
+                              except Exception as eu:
+                                  print(f"[patch-dl] immediate unpack failed: {eu}", flush=True)
+                                  import traceback
+                                  traceback.print_exc()
+
                               return
 
                           except Exception as e:
@@ -365,6 +382,13 @@ jobs:
                       return _orig_unpack(self, arch)
 
                   print(f"[patch-unpack] redirecting {filename} -> {redirected}", flush=True)
+                  # DEBUG: verify redirected file exists and has expected size
+                  sz = os.path.getsize(redirected)
+                  print(f"[patch-unpack] redirected file size={sz}", flush=True)
+                  if sz < 1000:
+                      print(f"[patch-unpack] WARNING: file too small, checking if HTML:", flush=True)
+                      with open(redirected, "rb") as f:
+                          print(f"  first 200 bytes: {f.read(200)}", flush=True)
                   # DEBUG: inspect zip contents
                   import zipfile
                   try:
