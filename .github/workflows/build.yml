@@ -10,6 +10,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_API: "34"
+      ANDROID_NDK_VERSION: "25.2.9519653"
+      P4A_DIST_NAME: "netease_comment_viewer"
+      P4A_STORAGE_DIR: "${{ github.workspace }}/.buildozer/android/platform/build"
 
     steps:
       - name: Checkout code
@@ -18,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10.x'
+          python-version: "3.10"
 
       - name: Install system dependencies
         run: |
@@ -51,220 +56,266 @@ jobs:
             make \
             gcc \
             g++ \
-            ccache
+            git \
+            tar \
+            ccache \
+            autoconf \
+            automake \
+            libtool \
+            cmake
 
-      - name: Set up Android SDK + tools for buildozer
+      - name: Prepare Android SDK
         run: |
-          mkdir -p ~/.buildozer/android/platform
-          ln -sfn /usr/local/lib/android/sdk ~/.buildozer/android/platform/android-sdk
-          mkdir -p ~/.buildozer/android/platform/android-sdk/tools/bin
-          ln -sf /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
-                 ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager
-
-      - name: Accept Android SDK licenses
-        run: |
-          export SDK=~/.buildozer/android/platform/android-sdk
+          export SDK=/usr/local/lib/android/sdk
           mkdir -p ~/.android
           touch ~/.android/repositories.cfg
-          yes | $SDK/tools/bin/sdkmanager --licenses 2>/dev/null || true
-          yes | $SDK/tools/bin/sdkmanager \
-            "build-tools;37.0.0" "platforms;android-34" \
-            --sdk_root=$SDK 2>/dev/null || true
+          yes | "${SDK}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          yes | "${SDK}/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;34.0.0" \
+            "ndk;${ANDROID_NDK_VERSION}" >/dev/null
+
+          mkdir -p ~/.buildozer/android/platform
+          ln -sfn "${SDK}" ~/.buildozer/android/platform/android-sdk
 
       - name: Install Python packages
         run: |
-          pip install --upgrade pip wheel setuptools
-          pip install Cython==0.29.36
-          pip install requests
-          pip install buildozer==1.5.0
-          pip install python-for-android
+          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install Cython==0.29.36 requests buildozer==1.5.0
+          python -m pip install "git+https://github.com/kivy/python-for-android.git@v2024.01.21"
 
-      - name: Build APK - patch download + run toolchain
+      - name: Build APK
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
           cat > /tmp/p4a_build.py << 'PYEOF'
+          import configparser
+          import os
+          import sys
+          import time
+          from urllib.parse import urlparse
+
+          import requests
           import pythonforandroid.recipe as p4a_r
-          import pythonforandroid.util as p4a_u
-          import requests, os, time, sys
 
-          # Record the CWD at script startup (before p4a changes it via current_directory).
-          # All relative paths from p4a context must be resolved against this base.
-          _LAUNCH_DIR = os.path.abspath(os.getcwd())
+          WORKSPACE = os.environ["GITHUB_WORKSPACE"]
+          ANDROID_API = os.environ.get("ANDROID_API", "34")
+          P4A_DIST_NAME = os.environ.get("P4A_DIST_NAME", "netease_comment_viewer")
+          P4A_STORAGE_DIR = os.environ["P4A_STORAGE_DIR"]
+          ANDROID_SDK = os.environ["ANDROIDSDK"]
+          ANDROID_NDK = os.environ["ANDROIDNDK"]
 
-          UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-          # SourceForge and Savannah are blocked by GitHub Actions.
-          # IMPORTANT: Use distribution tarball URLs only. GitHub archive URLs
-          # (github.com/*/archive/refs/tags/...) are git repo snapshots and
-          # do NOT contain the proper release tarball with configure scripts.
+          UA = (
+              "Mozilla/5.0 (X11; Linux x86_64) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/124.0.0.0 Safari/537.36"
+          )
 
           MIRROR_GROUPS = {
-              # freetype: blocked on download.savannah.gnu.org AND downloads.sourceforge.net
               "freetype": [
                   "https://download-mirror.savannah.gnu.org/releases/freetype/freetype-2.10.1.tar.gz",
                   "https://osdn.net/projects/sfnet_freetype/downloads/freetype2/2.10.1/freetype-2.10.1.tar.gz",
                   "https://ftp.lip6.fr/pub/pcgs/graphics/freetype/freetype-2.10.1.tar.gz",
                   "https://mirrors.kernel.org/gentoo/distfiles/freetype-2.10.1.tar.gz",
-                  "https://mirror.koddos.net/pub/software/graphics/freetype/freetype-2.10.1.tar.gz",
               ],
-              # libpng: blocked on sourceforge.net/projects/libpng
               "libpng": [
                   "https://osdn.net/projects/sfnet_libpng/downloads/libpng16/1.6.37/libpng-1.6.37.tar.gz",
                   "https://mirror.koddos.net/pub/software/graphics/libpng/libpng-1.6.37.tar.gz",
                   "https://ftp.lip6.fr/pub/pcgs/graphics/png/libpng-1.6.37.tar.gz",
-                  "https://www.ibiblio.org/pub/packages/graphics/libpng/libpng-1.6.37.tar.gz",
               ],
-              # sdl2_mixer: github.com libsdl-org gateway timeouts
               "sdl2_mixer": [
                   "https://www.libsdl.org/release/SDL2_mixer-2.6.3.tar.gz",
                   "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_mixer-2.6.3.tar.gz",
-                  "https://deb.debian.org/debian/pool/main/libs/libsdl2-mixer/SDL2_mixer_2.6.3+dfsg-1.tar.xz",
               ],
-              # sdl2_image: github.com libsdl-org - add mirrors for resilience
               "sdl2_image": [
                   "https://www.libsdl.org/release/SDL2_image-2.8.0.tar.gz",
                   "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_image-2.8.0.tar.gz",
               ],
-              # sdl2_ttf: github.com libsdl-org - add mirrors for resilience
               "sdl2_ttf": [
                   "https://www.libsdl.org/release/SDL2_ttf-2.20.2.tar.gz",
                   "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_ttf-2.20.2.tar.gz",
               ],
           }
 
-          SF_DOMAINS = {
-              "downloads.sourceforge.net/project/freetype":  "freetype",
-              "sourceforge.net/projects/libpng":             "libpng",
-              "downloads.sourceforge.net/project/libpng":     "libpng",
-              "sourceforge.net/projects/freetype":           "freetype",
-              "download.savannah.gnu.org":                   "freetype",
-              "download-mirror.savannah.gnu.org":            "freetype",
-              # GitHub libsdl-org packages with gateway timeout issues
-              "github.com/libsdl-org/SDL_mixer":              "sdl2_mixer",
-              "github.com/libsdl-org/SDL_image":              "sdl2_image",
-              "github.com/libsdl-org/SDL_ttf":                "sdl2_ttf",
+          ROUTE_RULES = {
+              "download.savannah.gnu.org": "freetype",
+              "download-mirror.savannah.gnu.org": "freetype",
+              "sourceforge.net/projects/freetype": "freetype",
+              "downloads.sourceforge.net/project/freetype": "freetype",
+              "sourceforge.net/projects/libpng": "libpng",
+              "downloads.sourceforge.net/project/libpng": "libpng",
+              "github.com/libsdl-org/SDL_mixer": "sdl2_mixer",
+              "github.com/libsdl-org/SDL_image": "sdl2_image",
+              "github.com/libsdl-org/SDL_ttf": "sdl2_ttf",
           }
 
-          def route_mirrors(url):
-              """Return [original_url, mirror1, mirror2, ...]."""
-              mirrors = [url]
-              for domain, key in SF_DOMAINS.items():
-                  if domain in url and key in MIRROR_GROUPS:
-                      mirrors += MIRROR_GROUPS[key]
+          def route_mirrors(url: str):
+              urls = [url]
+              for key, group in ROUTE_RULES.items():
+                  if key in url:
+                      urls.extend(MIRROR_GROUPS.get(group, []))
                       break
-              return mirrors
-
-          # ---------- Patch Recipe.download_if_necessary to handle blocked downloads ----------
-          # Patch at download_if_necessary level so we:
-          # 1. Always resolve packages_path against _LAUNCH_DIR (before p4a cd-changes cwd)
-          # 2. Write files and .mark to a stable absolute path p4a's unpack can find
-          _orig_din = p4a_r.Recipe.download_if_necessary
-          def patched_download_if_necessary(self):
-              # versioned_url already has {version} substituted.
-              url = self.versioned_url
-              if not url:
-                  return
-              # Derive filename from the already-versioned URL basename.
-              import posixpath as _pp
-              filename = _pp.basename(url.split("?")[0])
-              # Handle #md5=... or #sha1=... fragments in filename (same as p4a unpack does)
-              import re as _re
-              _ma = _re.match(r'^(.+)#[a-z0-9_]{3,}=[0-9a-f]{32,}$', filename)
-              if _ma:
-                  filename = _ma.group(1)
-              # Resolve packages_path against _LAUNCH_DIR so that p4a's current_directory()
-              # context switches do NOT affect where we write the file.
-              raw_pkg_path = getattr(self.ctx, "packages_path", None)
-              if raw_pkg_path:
-                  if os.path.isabs(raw_pkg_path):
-                      pkg_dir = os.path.join(raw_pkg_path, self.name)
-                  else:
-                      pkg_dir = os.path.join(_LAUNCH_DIR, raw_pkg_path, self.name)
-              else:
-                  pkg_dir = _LAUNCH_DIR
-              # Mark file uses p4a convention: .mark-{filename}
-              mark_file = os.path.join(pkg_dir, f".mark-{filename}")
-              target = os.path.join(pkg_dir, filename)
-              # Skip if already downloaded (mark + file both present).
-              if os.path.exists(mark_file) and os.path.exists(target):
-                  print(f"  [patch-skip] {filename} (cached in {pkg_dir})")
-                  return
-              # Not cached — download with mirror routing.
-              urls = route_mirrors(url)
-              last_err = None
+              # 去重，保持顺序
+              seen = set()
+              ordered = []
               for u in urls:
-                  print(f"  [patch-dl] {u[:80]}...")
+                  if u not in seen:
+                      ordered.append(u)
+                      seen.add(u)
+              return ordered
+
+          def _looks_like_html(path: str) -> bool:
+              try:
+                  with open(path, "rb") as f:
+                      head = f.read(512).lstrip()
+                  return head.startswith(b"<")
+              except Exception:
+                  return False
+
+          _orig_download_file = p4a_r.Recipe.download_file
+
+          def patched_download_file(self, url, target, cwd=None):
+              parsed = urlparse(url)
+              if parsed.scheme not in ("http", "https"):
+                  return _orig_download_file(self, url, target, cwd=cwd)
+
+              target_path = os.path.join(cwd, target) if cwd else target
+              os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+
+              last_err = None
+              for candidate in route_mirrors(url):
+                  print(f"[patch-dl] trying: {candidate}")
                   for attempt in range(5):
                       try:
-                          p4a_u.ensure_dir(pkg_dir)
-                          r = requests.get(u, headers={"User-Agent": UA}, timeout=120,
-                                            allow_redirects=True, stream=True)
-                          r.raise_for_status()
-                          data = b"".join(r.iter_content(chunk_size=65536))
-                          if len(data) < 5000 and data[:1] == b"<":
-                              print(f"  [patch-dl] HTML response, trying next mirror...")
-                              break
-                          with open(target, "wb") as f:
-                              f.write(data)
-                              f.flush()
-                              os.fsync(f.fileno())
-                          if not os.path.exists(target):
-                              raise IOError(f"write verified failed: {target}")
-                          # Write p4a-compatible .mark-{filename} and sync.
-                          with open(mark_file, "w") as mf:
-                              mf.flush()
-                              os.fsync(mf.fileno())
-                          print(f"  [patch-dl OK] {filename} = {len(data):,}B → {target}")
-                          return
-                      except requests.exceptions.RequestException as e:
-                          last_err = e
-                          print(f"  [patch-dl retry {attempt+1}/5] {e}")
-                          if attempt < 4:
-                              time.sleep(2**attempt)
-                  print(f"  [patch-dl] all attempts exhausted for {u[:60]}, trying next mirror...")
-              if last_err:
-                  raise last_err
-          p4a_r.Recipe.download_if_necessary = patched_download_if_necessary
-          print("\n[p4a-patch] patched successfully, now running toolchain...")
+                          if os.path.exists(target_path):
+                              os.remove(target_path)
 
-          # ---------- 3. Run p4a toolchain ----------
+                          with requests.get(
+                              candidate,
+                              headers={"User-Agent": UA},
+                              timeout=(30, 180),
+                              allow_redirects=True,
+                              stream=True,
+                          ) as r:
+                              r.raise_for_status()
+                              ctype = (r.headers.get("content-type") or "").lower()
+                              with open(target_path, "wb") as f:
+                                  for chunk in r.iter_content(chunk_size=1024 * 64):
+                                      if chunk:
+                                          f.write(chunk)
+
+                          if not os.path.isfile(target_path):
+                              raise RuntimeError(f"download target not created: {target_path}")
+
+                          if os.path.getsize(target_path) < 4096 and _looks_like_html(target_path):
+                              raise RuntimeError("mirror returned HTML instead of archive")
+
+                          print(f"[patch-dl] OK -> {target_path}")
+                          return target_path
+
+                      except Exception as e:
+                          last_err = e
+                          print(f"[patch-dl] retry {attempt + 1}/5 failed: {e}")
+                          if attempt < 4:
+                              time.sleep(2 ** attempt)
+
+                  print(f"[patch-dl] mirror exhausted: {candidate}")
+
+              raise last_err if last_err else RuntimeError(f"failed to download: {url}")
+
+          p4a_r.Recipe.download_file = patched_download_file
+
+          def read_buildozer_spec():
+              spec_path = os.path.join(WORKSPACE, "buildozer.spec")
+              meta = {
+                  "private": WORKSPACE,
+                  "package": "org.example.netease_comment_viewer",
+                  "name": "Netease Comment Viewer",
+                  "version": "0.1",
+                  "requirements": "python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3",
+              }
+
+              if not os.path.isfile(spec_path):
+                  return meta
+
+              parser = configparser.ConfigParser()
+              parser.read(spec_path, encoding="utf-8")
+              if "app" not in parser:
+                  return meta
+
+              app = parser["app"]
+
+              source_dir = app.get("source.dir", ".").strip()
+              meta["private"] = os.path.abspath(os.path.join(WORKSPACE, source_dir))
+
+              package_name = app.get("package.name", "netease_comment_viewer").strip()
+              package_domain = app.get("package.domain", "org.example").strip()
+              package_name = package_name.replace("-", "_")
+              meta["package"] = f"{package_domain}.{package_name}"
+
+              title = app.get("title", package_name).strip()
+              if title:
+                  meta["name"] = title
+
+              version = app.get("version", "").strip()
+              if version:
+                  meta["version"] = version
+
+              requirements = app.get("requirements", "").strip()
+              if requirements:
+                  meta["requirements"] = requirements
+
+              return meta
+
+          meta = read_buildozer_spec()
+
+          print("[meta]", meta)
+
           sys.argv = [
               "toolchain.py",
-              "create",
-              "--dist-name=netease_comment_viewer",
+              "apk",
+              f"--private={meta['private']}",
+              f"--package={meta['package']}",
+              f"--name={meta['name']}",
+              f"--version={meta['version']}",
+              f"--dist-name={P4A_DIST_NAME}",
               "--bootstrap=sdl2",
-              "--requirements=python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3",
+              f"--requirements={meta['requirements']}",
               "--arch=arm64-v8a",
               "--arch=armeabi-v7a",
-              "--android-api=34",
+              f"--android-api={ANDROID_API}",
               "--ndk-api=21",
+              f"--storage-dir={P4A_STORAGE_DIR}",
+              f"--sdk-dir={ANDROID_SDK}",
+              f"--ndk-dir={ANDROID_NDK}",
               "--copy-libs",
-              "--color=always",
-              "--storage-dir=.buildozer/android/platform/build",
               "--debug",
           ]
+
           from pythonforandroid.toolchain import main
           main()
           PYEOF
 
-          ANDROIDNDK=/usr/local/lib/android/sdk/ndk/27.3.13750724 \
-          ANDROIDSDK=/usr/local/lib/android/sdk \
-          ANDROID_HOME=/usr/local/lib/android/sdk \
-          ANDROID_SDK_ROOT=/usr/local/lib/android/sdk \
-          ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.3.13750724 \
-          P4A_ANDROID_NDK_API=21 \
-            python3 /tmp/p4a_build.py 2>&1
+          export ANDROIDSDK=/usr/local/lib/android/sdk
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export ANDROIDNDK=/usr/local/lib/android/sdk/ndk/${ANDROID_NDK_VERSION}
+          export ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/${ANDROID_NDK_VERSION}
+          export P4A_ANDROID_NDK_API=21
+
+          python /tmp/p4a_build.py 2>&1 | tee /tmp/p4a_build.log
 
       - name: Find and copy APK
         if: success()
         run: |
           echo "=== Looking for APK ==="
-          find . -name "*.apk" -type f 2>/dev/null
+          find . -name "*.apk" -type f 2>/dev/null || true
           mkdir -p bin
-          cp .buildozer/android/platform/build/*/armeabi-v7a/*/dist/*.apk bin/ 2>/dev/null || \
-          cp .buildozer/android/platform/build/*/armeabi-v7a/*/*.apk bin/ 2>/dev/null || \
-          find .buildozer -name "*.apk" -exec cp {} bin/ \; 2>/dev/null || true
+          find "${P4A_STORAGE_DIR}" -name "*.apk" -type f -exec cp {} bin/ \; 2>/dev/null || true
+          find .buildozer -name "*.apk" -type f -exec cp {} bin/ \; 2>/dev/null || true
           echo "=== APKs in bin/ ==="
-          ls -lh bin/*.apk 2>/dev/null || echo "No APK found"
+          ls -lh bin/*.apk
 
       - name: Upload APK
         if: success()
@@ -277,7 +328,8 @@ jobs:
       - name: Show error log
         if: failure()
         run: |
-          echo "=== build artifacts ==="
-          find .buildozer -name "*.apk" 2>/dev/null | head -5
+          echo "=== p4a build log ==="
+          tail -n 200 /tmp/p4a_build.log 2>/dev/null || true
           echo ""
-          tail -n 100 .buildozer/logs/buildozer.log 2>/dev/null || echo "No log"
+          echo "=== .buildozer logs ==="
+          find .buildozer -maxdepth 3 -type f | sort | tail -n 50 || true
