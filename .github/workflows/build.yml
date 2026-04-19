@@ -424,7 +424,8 @@ jobs:
           echo "=== build APK with p4a toolchain ==="
           python -m pythonforandroid.toolchain apk \
             --debug \
-            --archs arm64-v8a armeabi-v7a \
+            --arch arm64-v8a \
+            --arch armeabi-v7a \
             2>&1 | tee buildozer-ci.log
 
           echo "=== search APK after build ==="
