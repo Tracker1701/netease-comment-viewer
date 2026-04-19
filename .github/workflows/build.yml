@@ -418,11 +418,13 @@ jobs:
           python -c "import pythonforandroid; print('p4a:', pythonforandroid.__version__)"
           python -c "import pythonforandroid.recipe; print('Recipe module OK')"
 
-          echo "=== clean + build with p4a toolchain ==="
-          python -m pythonforandroid.toolchain clean 2>&1 || true
-          python -m pythonforandroid.toolchain build --debug \
+          echo "=== clean dists ==="
+          python -m pythonforandroid.toolchain clean_dists 2>&1 || true
+
+          echo "=== build APK with p4a toolchain ==="
+          python -m pythonforandroid.toolchain apk \
+            --debug \
             --archs arm64-v8a armeabi-v7a \
-            --require-sdk-login \
             2>&1 | tee buildozer-ci.log
 
           echo "=== search APK after build ==="
