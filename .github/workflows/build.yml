@@ -158,30 +158,34 @@ jobs:
           python -m pip install Cython==0.29.36 requests
           python -m pip install "git+https://github.com/kivy/python-for-android.git@v2024.01.21"
 
-      - name: Create python-for-android download patch
+      - name: Install Python packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install Cython==0.29.36 requests
+          python -m pip install "git+https://github.com/kivy/python-for-android.git@v2024.01.21"
+
+      - name: Create p4a CI patch file
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p .github/ci_patch
-          cat > .github/ci_patch/sitecustomize.py << 'PYEOF'
-          import os
-          import time
-          import posixpath
+          cat > .github/ci_patch/ci_patch.py << 'PYEOF'
+          import os, sys, time, posixpath, shutil, zipfile
 
           # Fixed at script injection time — the cwd when p4a/buildozer is launched.
-          # All packages_path operations are resolved relative to this.
           _LAUNCH_DIR = os.path.abspath(os.getcwd())
 
-          def _install_patch():
-              try:
-                  import requests
-                  import pythonforandroid.recipe as p4a_r
-              except Exception:
-                  return
+          print("[ci-patch] CI patch module loaded", flush=True)
 
+          def install_patch():
+              import requests
+              import pythonforandroid.recipe as p4a_r
               Recipe = p4a_r.Recipe
-              if getattr(Recipe.download_if_necessary, "_ci_patched", False):
-                  return
+              print(f"[ci-patch] Recipe class: {Recipe}", flush=True)
+              print(f"[ci-patch] Recipe.download_if_necessary: {Recipe.download_if_necessary}", flush=True)
+              print(f"[ci-patch] installing patch...", flush=True)
 
               UA = (
                   "Mozilla/5.0 (X11; Linux x86_64) "
@@ -227,7 +231,7 @@ jobs:
                   "github.com/libsdl-org/SDL_ttf": "sdl2_ttf",
               }
 
-              def route_mirrors(url: str):
+              def route_mirrors(url):
                   urls = [url]
                   for key, group in ROUTE_RULES.items():
                       if key in url:
@@ -241,7 +245,7 @@ jobs:
                           seen.add(u)
                   return ordered
 
-              def looks_like_html(path: str) -> bool:
+              def looks_like_html(path):
                   try:
                       with open(path, "rb") as f:
                           head = f.read(512).lstrip()
@@ -249,202 +253,98 @@ jobs:
                   except Exception:
                       return False
 
-              # ------------------------------------------------------------------
-              # PATCH 1: download_if_necessary
-              #   - download to packages/{name}/  (where p4a expects it)
-              #   - write .mark-{filename} so p4a skips re-download on next run
-              # ------------------------------------------------------------------
-              _orig_dlin = Recipe.download_if_necessary
-
-              def _patched_dlin(self, arch=None):
-                  print(f"[patch-dlin ENTER] recipe={getattr(self,'name','?')} url={getattr(self,'url',None)!r} versioned_url={getattr(self,'versioned_url',None)!r}", flush=True)
-                  # Git-based recipes (android, kivy) have no url attribute.
-                  # Fall through to the original method for those.
-                  if not getattr(self, "url", None):
-                      return _orig_dlin(self)
-
-                  # Use versioned_url to derive the actual filename to download.
-                  # self.versioned_url has {version} already substituted.
-                  filename = posixpath.basename(self.versioned_url.split("?")[0])
-
-                  # Resolve packages_path against _LAUNCH_DIR to avoid p4a's
-                  # current_directory() switching cwd and breaking relative paths.
-                  raw_pkg_path = getattr(self.ctx, "packages_path", "packages")
+              def _get_pkg_dir(recipe_self):
+                  raw_pkg_path = getattr(recipe_self.ctx, "packages_path", "packages")
                   if os.path.isabs(raw_pkg_path):
-                      pkg_dir = os.path.join(raw_pkg_path, self.name)
-                  else:
-                      pkg_dir = os.path.join(_LAUNCH_DIR, raw_pkg_path, self.name)
+                      return os.path.join(raw_pkg_path, recipe_self.name)
+                  return os.path.join(_LAUNCH_DIR, raw_pkg_path, recipe_self.name)
 
-                  os.makedirs(pkg_dir, exist_ok=True)
-                  target = os.path.join(pkg_dir, filename)
-                  target_abs = os.path.abspath(target)
-
-                  mark_path = os.path.join(pkg_dir, ".mark-" + filename)
-                  mark_abs = os.path.abspath(mark_path)
-
-                  # Skip if already marked as downloaded
-                  if os.path.isfile(mark_abs):
-                      print(f"[patch-dl] skip (marked): {filename}", flush=True)
-                      return
-
-                  print(f"[patch-dl] {self.versioned_url} -> {target_abs}", flush=True)
-
-                  last_err = None
-                  for candidate in route_mirrors(self.versioned_url):
-                      print(f"  [patch-dl] trying: {candidate}", flush=True)
-                      for attempt in range(5):
-                          try:
-                              if os.path.exists(target_abs):
-                                  os.remove(target_abs)
-
-                              with requests.get(
-                                  candidate,
-                                  headers={"User-Agent": UA},
-                                  timeout=(30, 180),
-                                  allow_redirects=True,
-                                  stream=True,
-                              ) as r:
-                                  r.raise_for_status()
-                                  with open(target_abs, "wb") as f:
-                                      for chunk in r.iter_content(chunk_size=65536):
-                                          if chunk:
-                                              f.write(chunk)
-
-                              if not os.path.isfile(target_abs):
-                                  raise RuntimeError(f"download target not created: {target_abs}")
-
-                              sz = os.path.getsize(target_abs)
-                              if sz < 4096 and looks_like_html(target_abs):
-                                  raise RuntimeError("mirror returned HTML instead of archive")
-
-                              print(f"  [patch-dl] OK {sz}B: {target_abs}", flush=True)
-
-                              # Write .mark file so p4a won't re-trigger download
-                              with open(mark_abs, "w") as mf:
-                                  mf.write(candidate)
-                              os.sync()
-
-                              # Immediately unpack after download, before returning.
-                              # This ensures the archive is extracted to other_builds/
-                              # even if p4a's own unpack is skipped (cache hit).
-                              # Use globals() for late binding since _patched_unpack
-                              # is defined below this function in the source.
-                              print(f"[patch-dl] download OK, triggering immediate unpack for {self.name}", flush=True)
-                              try:
-                                  _pu = globals().get("_patched_unpack")
-                                  if _pu:
-                                      _pu(self, arch or "arm64-v8a")
-                                  else:
-                                      print(f"[patch-dl] _patched_unpack not yet defined, skipping", flush=True)
-                              except Exception as eu:
-                                  print(f"[patch-dl] immediate unpack failed: {eu}", flush=True)
-                                  import traceback
-                                  traceback.print_exc()
-
-                              return
-
-                          except Exception as e:
-                              last_err = e
-                              print(f"  [patch-dl] retry {attempt + 1}/5 failed: {e}", flush=True)
-                              if attempt < 4:
-                                  time.sleep(2 ** attempt)
-
-                      print(f"  [patch-dl] mirror exhausted: {candidate}", flush=True)
-
-                  raise last_err if last_err else RuntimeError(f"failed to download: {self.versioned_url}")
-
-              _patched_dlin._ci_patched = True
-              Recipe.download_if_necessary = _patched_dlin
-
-              # ------------------------------------------------------------------
-              # PATCH 2: unpack
-              #   - redirect archive_path to packages/{name}/  (where we downloaded)
-              #   - so shutil.unpack_archive finds the file regardless of cwd
-              # ------------------------------------------------------------------
-              _orig_unpack = Recipe.unpack
-
-              def _patched_unpack(self, arch):
-                  print(f"[patch-unpack ENTER] recipe={getattr(self,'name','?')} arch={arch}", flush=True)
-                  # Git-based recipes have no url attribute.
-                  if not getattr(self, "url", None):
-                      return _orig_unpack(self, arch)
-
-                  # Build the redirected archive path: packages/{name}/{filename}
-                  filename = posixpath.basename(self.versioned_url.split("?")[0])
-                  raw_pkg_path = getattr(self.ctx, "packages_path", "packages")
-                  if os.path.isabs(raw_pkg_path):
-                      pkg_dir = os.path.join(raw_pkg_path, self.name)
-                  else:
-                      pkg_dir = os.path.join(_LAUNCH_DIR, raw_pkg_path, self.name)
-                  redirected = os.path.abspath(os.path.join(pkg_dir, filename))
-
-                  if not os.path.isfile(redirected):
-                      # Fall back to original path (shouldn't happen)
-                      print(f"[patch-unpack] redirect not found, using original: {filename}", flush=True)
-                      return _orig_unpack(self, arch)
-
-                  print(f"[patch-unpack] redirecting {filename} -> {redirected}", flush=True)
-                  # DEBUG: verify redirected file exists and has expected size
-                  sz = os.path.getsize(redirected)
-                  print(f"[patch-unpack] redirected file size={sz}", flush=True)
-                  if sz < 1000:
-                      print(f"[patch-unpack] WARNING: file too small, checking if HTML:", flush=True)
-                      with open(redirected, "rb") as f:
-                          print(f"  first 200 bytes: {f.read(200)}", flush=True)
-                  # DEBUG: inspect zip contents
-                  import zipfile
-                  try:
-                      with zipfile.ZipFile(redirected, "r") as zf:
-                          names = zf.namelist()
-                          print(f"[patch-unpack] zip contents ({len(names)} entries): {names[:10]}...", flush=True)
-                  except Exception as ez:
-                      print(f"[patch-unpack] zip inspection failed: {ez}", flush=True)
-
-                  # Call the original unpack with a monkey-patched archive path
-                  import shutil
-                  build_dir = self.get_build_dir(arch)
-                  extract_to = os.path.join(build_dir, "temp_extract_" + self.name)
+              def _do_unpack(recipe_self, arch):
+                  filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
+                  redirected = os.path.abspath(os.path.join(_get_pkg_dir(recipe_self), filename))
+                  build_dir = recipe_self.get_build_dir(arch)
+                  extract_to = os.path.join(build_dir, "temp_extract_" + recipe_self.name)
                   if os.path.exists(extract_to):
                       shutil.rmtree(extract_to)
                   os.makedirs(extract_to, exist_ok=True)
+                  print(f"[ci-patch-unpack] extracting {redirected} -> {extract_to}", flush=True)
                   shutil.unpack_archive(redirected, extract_to)
-                  print(f"[patch-unpack] extracted to {extract_to}, listing:", flush=True)
-                  print(f"  {os.listdir(extract_to)}", flush=True)
-                  # Move contents up one level (standard p4a behaviour)
                   inner = os.listdir(extract_to)
+                  print(f"[ci-patch-unpack] inner contents: {inner}", flush=True)
                   if len(inner) == 1:
                       inner_path = os.path.join(extract_to, inner[0])
                       if os.path.isdir(inner_path):
-                          inner_items = os.listdir(inner_path)
-                          print(f"[patch-unpack] single inner dir '{inner[0]}', moving: {inner_items}", flush=True)
-                          for item in inner_items:
-                              os.rename(
-                                  os.path.join(inner_path, item),
-                                  os.path.join(build_dir, item),
-                              )
+                          for item in os.listdir(inner_path):
+                              os.rename(os.path.join(inner_path, item), os.path.join(build_dir, item))
                           os.rmdir(inner_path)
                       else:
                           os.rename(inner_path, os.path.join(build_dir, inner[0]))
                   for item in os.listdir(extract_to):
                       os.rename(os.path.join(extract_to, item), os.path.join(build_dir, item))
                   os.rmdir(extract_to)
-                  print(f"[patch-unpack] build_dir contents after move: {os.listdir(build_dir)}", flush=True)
+                  print(f"[ci-patch-unpack] done, build_dir: {os.listdir(build_dir)}", flush=True)
 
-              _orig_unpack._ci_patched = True
+              _orig_dlin = Recipe.download_if_necessary
+              _orig_unpack = Recipe.unpack
+
+              def _patched_dlin(recipe_self, arch=None):
+                  print(f"[ci-patch-dlin] ENTER recipe={getattr(recipe_self,'name','?')} arch={arch}", flush=True)
+                  if not getattr(recipe_self, "url", None):
+                      return _orig_dlin(recipe_self)
+                  filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
+                  pkg_dir = _get_pkg_dir(recipe_self)
+                  os.makedirs(pkg_dir, exist_ok=True)
+                  target_abs = os.path.abspath(os.path.join(pkg_dir, filename))
+                  mark_abs = os.path.abspath(os.path.join(pkg_dir, ".mark-" + filename))
+                  if os.path.isfile(mark_abs):
+                      print(f"[ci-patch-dlin] skip (marked): {filename}", flush=True)
+                      return
+                  print(f"[ci-patch-dlin] downloading {recipe_self.versioned_url} -> {target_abs}", flush=True)
+                  last_err = None
+                  for candidate in route_mirrors(recipe_self.versioned_url):
+                      for attempt in range(5):
+                          try:
+                              if os.path.exists(target_abs):
+                                  os.remove(target_abs)
+                              with requests.get(candidate, headers={"User-Agent": UA},
+                                                timeout=(30, 180), allow_redirects=True, stream=True) as r:
+                                  r.raise_for_status()
+                                  with open(target_abs, "wb") as f:
+                                      for chunk in r.iter_content(chunk_size=65536):
+                                          if chunk:
+                                              f.write(chunk)
+                              sz = os.path.getsize(target_abs)
+                              if sz < 4096 and looks_like_html(target_abs):
+                                  raise RuntimeError("mirror returned HTML")
+                              print(f"[ci-patch-dlin] OK {sz}B: {candidate}", flush=True)
+                              with open(mark_abs, "w") as mf:
+                                  mf.write(candidate)
+                              os.sync()
+                              _do_unpack(recipe_self, arch or "arm64-v8a")
+                              return
+                          except Exception as e:
+                              last_err = e
+                              print(f"[ci-patch-dlin] retry {attempt+1}/5 failed: {e}", flush=True)
+                              if attempt < 4:
+                                  time.sleep(2 ** attempt)
+                  raise last_err
+
+              def _patched_unpack(recipe_self, arch):
+                  print(f"[ci-patch-unpack] ENTER recipe={getattr(recipe_self,'name','?')} arch={arch}", flush=True)
+                  if not getattr(recipe_self, "url", None):
+                      return _orig_unpack(recipe_self, arch)
+                  _do_unpack(recipe_self, arch)
+
+              Recipe.download_if_necessary = _patched_dlin
               Recipe.unpack = _patched_unpack
+              print("[ci-patch] patches installed successfully", flush=True)
 
-          try:
-              _install_patch()
-          except Exception as e:
-              import traceback
-              traceback.print_exc()
-              print(f"[sitecustomize] patch error: {e}", flush=True)
+          install_patch()
           PYEOF
+          echo "ci_patch.py created"
 
       - name: Build debug APK
         shell: bash
-        env:
-          PYTHONPATH: ${{ github.workspace }}/.github/ci_patch
         run: |
           set -euxo pipefail
 
@@ -459,36 +359,51 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
           echo "ANDROIDSDK=$ANDROIDSDK"
           echo "ANDROIDNDK=$ANDROIDNDK"
-          echo "PYTHONPATH=$PYTHONPATH"
 
           echo "=== SDK contents ==="
           ls -la "$ANDROID_SDK_ROOT/build-tools/" || echo "no build-tools dir"
           ls -la "$ANDROID_SDK_ROOT/platforms/" || echo "no platforms dir"
 
-          echo "=== p4a version ==="
-          python -c "import pythonforandroid; print('p4a:', pythonforandroid.__version__)"
-          python -c "import pythonforandroid.recipe; print('Recipe module OK')"
-
+          echo "=== ci_patch.py exists? ==="
+          ls -la .github/ci_patch/
+          head -3 .github/ci_patch/ci_patch.py
 
           echo "=== clean dists + wipe build cache ==="
+          python -c "import sys; sys.path.insert(0,'.github/ci_patch'); import ci_patch" || true
           python -m pythonforandroid.toolchain clean_dists 2>&1 || true
-          # Also wipe the entire build cache to force re-download and re-unpack.
-          # Without this, old (incorrectly unpacked) artifacts in other_builds/
-          # cause ./configure not found errors.
           rm -rf ~/.local/share/python-for-android/build/other_builds/
           rm -rf ~/.local/share/python-for-android/build/bootstrap_builds/
           echo "Build cache wiped."
 
+          echo "=== verify patch installed ==="
+          python -c "
+import sys; sys.path.insert(0,'.github/ci_patch')
+import ci_patch
+import pythonforandroid.recipe as r
+print('Recipe.download_if_necessary:', r.Recipe.download_if_necessary)
+"
+
           echo "=== build APK with p4a toolchain ==="
-          python -m pythonforandroid.toolchain apk \
-            --debug \
-            --bootstrap sdl2 \
-            --android-api 34 \
-            --ndk-api 21 \
-            --requirements python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3 \
-            --arch arm64-v8a \
-            --arch armeabi-v7a \
-            2>&1 | tee buildozer-ci.log
+          # IMPORTANT: import ci_patch BEFORE running p4a toolchain so the patch
+          # is installed before p4a's Recipe class is ever referenced.
+          python -c "
+import sys
+sys.path.insert(0, '.github/ci_patch')
+import ci_patch
+from pythonforandroid.toolchain import main
+import sys
+sys.argv = ['',
+  'apk',
+  '--debug',
+  '--bootstrap', 'sdl2',
+  '--android-api', '34',
+  '--ndk-api', '21',
+  '--requirements', 'python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3',
+  '--arch', 'arm64-v8a',
+  '--arch', 'armeabi-v7a',
+]
+main()
+" 2>&1 | tee buildozer-ci.log
 
           echo "=== search APK after build ==="
           # p4a toolchain.py puts APKs in .buildozer/android/platform/build/dists/{app_name}/bin/
