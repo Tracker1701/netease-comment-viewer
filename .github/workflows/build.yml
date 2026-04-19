@@ -98,46 +98,64 @@ jobs:
 
           run_sdkmanager() {
             set +o pipefail
-            yes | "$SDKMANAGER" --sdk_root="${ANDROID_SDK_ROOT}" "$@" >/dev/null
+            yes | "$SDKMANAGER" --sdk_root="${ANDROID_SDK_ROOT}" "$@" >/tmp/sdkmanager.log 2>&1
             local sdk_status=${PIPESTATUS[1]}
             set -o pipefail
             return "$sdk_status"
           }
 
-          # Accept ALL licenses before installing anything
+          echo "=== accept licenses ==="
           yes | "$SDKMANAGER" --sdk_root="${ANDROID_SDK_ROOT}" --licenses || true
+
+          echo "=== install SDK packages ==="
           run_sdkmanager \
             "platform-tools" \
             "platforms;android-${ANDROID_API}" \
             "build-tools;34.0.0" \
+            "build-tools;37.0.0" \
             "ndk;${ANDROID_NDK_VERSION}"
 
-          # Explicitly accept licenses again in case a package was added after first pass
+          echo "=== accept licenses again (post-install) ==="
           yes | "$SDKMANAGER" --sdk_root="${ANDROID_SDK_ROOT}" --licenses || true
 
           echo "ANDROIDNDK=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
           echo "ANDROIDSDK=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
 
+          echo "=== verify installations ==="
           test -d "${ANDROID_SDK_ROOT}/platforms/android-${ANDROID_API}"
           test -d "${ANDROID_SDK_ROOT}/build-tools/34.0.0"
+          test -d "${ANDROID_SDK_ROOT}/build-tools/37.0.0"
           test -d "${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
+          echo "All required dirs exist"
 
-          # Buildozer's default SDK detection looks for a bare "build-tools/" dir
-          # (no version suffix). Create a symlink so it finds 34.0.0.
+          echo "=== create bare build-tools symlink (buildozer default SDK detection) ==="
           BT_DIR="${ANDROID_SDK_ROOT}/build-tools"
-          BT_VER="$(ls "$BT_DIR" 2>/dev/null | grep -E '^[0-9]' | sort -V | tail -1)"
-          if [[ -n "$BT_VER" && ! -e "${BT_DIR}/build-tools" ]]; then
-            ln -s "${BT_DIR}/${BT_VER}" "${BT_DIR}/build-tools"
-            echo "Linked build-tools -> $BT_VER"
+          echo "BT_DIR=$BT_DIR"
+          ls -la "$BT_DIR/"
+          BT_VER="$(ls "$BT_DIR" | grep -E '^[0-9]' | sort -V | tail -1)"
+          echo "BT_VER=$BT_VER"
+          if [[ -n "$BT_VER" ]]; then
+            if [[ -L "${BT_DIR}/build-tools" ]]; then
+              echo "symlink already exists: $(readlink "${BT_DIR}/build-tools")"
+            elif [[ -d "${BT_DIR}/build-tools" ]]; then
+              echo "build-tools dir already exists (not a symlink)"
+            else
+              ln -s "${BT_DIR}/${BT_VER}" "${BT_DIR}/build-tools"
+              echo "Created symlink: build-tools -> $BT_VER"
+            fi
+          else
+            echo "ERROR: no build-tools version found in $BT_DIR"
           fi
+          echo "=== final build-tools state ==="
+          ls -la "$BT_DIR/"
 
       - name: Install Python packages
         shell: bash
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install Cython==0.29.36 requests buildozer==1.5.0
+          python -m pip install Cython==0.29.36 requests
           python -m pip install "git+https://github.com/kivy/python-for-android.git@v2024.01.21"
 
       - name: Create python-for-android download patch
@@ -385,35 +403,32 @@ jobs:
           export ANDROID_HOME="${ANDROID_SDK_ROOT}"
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT}"
 
-          echo "=== SDK detection ==="
+          echo "=== env vars ==="
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la "$ANDROID_SDK_ROOT/build-tools/" || echo "no build-tools"
-          ls -la "$ANDROID_SDK_ROOT/platforms/" || echo "no platforms"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          echo "ANDROIDSDK=$ANDROIDSDK"
+          echo "ANDROIDNDK=$ANDROIDNDK"
+          echo "PYTHONPATH=$PYTHONPATH"
 
-          echo "=== what buildozer sees ==="
-          python -c "
-import os, sys
-sdk = os.environ.get('ANDROIDSDK') or os.environ.get('ANDROID_HOME', 'NOT SET')
-ndk = os.environ.get('ANDROIDNDK') or os.environ.get('ANDROID_NDK_HOME', 'NOT SET')
-print(f'ANDROIDSDK={sdk}')
-print(f'ANDROIDNDK={ndk}')
-print(f'ANDROID_HOME={os.environ.get(\"ANDROID_HOME\", \"NOT SET\")}')
-"
+          echo "=== SDK contents ==="
+          ls -la "$ANDROID_SDK_ROOT/build-tools/" || echo "no build-tools dir"
+          ls -la "$ANDROID_SDK_ROOT/platforms/" || echo "no platforms dir"
 
-          echo "=== buildozer version ==="
-          buildozer --version
+          echo "=== p4a version ==="
+          python -c "import pythonforandroid; print('p4a:', pythonforandroid.__version__)"
+          python -c "import pythonforandroid.recipe; print('Recipe module OK')"
 
-          echo "=== clean + build ==="
-          buildozer android clean || true
-          buildozer -v android debug 2>&1 | tee buildozer-ci.log
-
-          buildozer android clean || true
-          buildozer -v android debug 2>&1 | tee buildozer-ci.log
+          echo "=== clean + build with p4a toolchain ==="
+          python -m pythonforandroid.toolchain clean 2>&1 || true
+          python -m pythonforandroid.toolchain build --debug \
+            --archs arm64-v8a armeabi-v7a \
+            --require-sdk-login \
+            2>&1 | tee buildozer-ci.log
 
           echo "=== search APK after build ==="
-          find . -type f \( -name "*.apk" -o -name "*.aab" \) | sort || true
-          ls -lah bin || true
+          # p4a toolchain.py puts APKs in .buildozer/android/platform/build/dists/{app_name}/bin/
+          find .buildozer -type f \( -name "*.apk" -o -name "*.aab" \) 2>/dev/null | sort || true
+          ls -lah .buildozer/android/platform/build/dists/ 2>/dev/null || true
 
       - name: Collect APKs
         id: collect
@@ -423,8 +438,8 @@ print(f'ANDROID_HOME={os.environ.get(\"ANDROID_HOME\", \"NOT SET\")}')
           set -euxo pipefail
           mkdir -p dist
           shopt -s nullglob globstar
-
-          files=(bin/*.apk .buildozer/**/*.apk)
+          # p4a toolchain.py outputs to .buildozer/android/platform/build/dists/{name}/bin/
+          files=(.buildozer/android/platform/build/dists/*/bin/*.apk .buildozer/**/*.apk)
           found=0
 
           for f in "${files[@]}"; do
@@ -441,7 +456,9 @@ print(f'ANDROID_HOME={os.environ.get(\"ANDROID_HOME\", \"NOT SET\")}')
           fi
 
           echo "=== APKs in dist ==="
-          ls -lah dist
+          ls -lah dist || true
+          # Also check p4a's dist output dir
+          find .buildozer/android/platform/build/dists -name "*.apk" 2>/dev/null || true
           echo "apk_found=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
@@ -470,8 +487,8 @@ print(f'ANDROID_HOME={os.environ.get(\"ANDROID_HOME\", \"NOT SET\")}')
         shell: bash
         run: |
           set +e
-          echo "=== buildozer-ci.log tail ==="
-          tail -n 300 buildozer-ci.log 2>/dev/null || true
+          echo "=== buildozer-ci.log tail (last 500 lines) ==="
+          tail -n 500 buildozer-ci.log 2>/dev/null || true
           echo
           echo "=== .buildozer log files ==="
           find .buildozer -type f | sort | tail -n 200 || true
