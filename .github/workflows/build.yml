@@ -386,12 +386,16 @@ jobs:
           echo "=== clean dists + wipe build cache ==="
           python -c "import sys; sys.path.insert(0,'.github/ci_patch'); import ci_patch" || true
           python -m pythonforandroid.toolchain clean_dists 2>&1 || true
-          rm -rf ~/.local/share/python-for-android/build/other_builds/
-          rm -rf ~/.local/share/python-for-android/build/bootstrap_builds/
-          echo "=== wipe hostpython3 build dir (residual Grammar/Lib/etc cause os.rename errors) ==="
-          rm -rf ~/.local/share/python-for-android/build/other_builds/hostpython3/
-          rm -rf ~/.local/share/python-for-android/build/bootstrap_builds/hostpython3/
-          echo "Build Cache wiped."
+          echo "=== FULL wipe: remove empty build dirs so needs_build returns True ==="
+          # Delete only EMPTY subdirs; then remove the parent dir too if empty
+          for topdir in ~/.local/share/python-for-android/build/other_builds ~/.local/share/python-for-android/build/bootstrap_builds; do
+            for subdir in "$topdir"/*/; do
+              rm -rf "$subdir" 2>/dev/null || true
+            done
+            rmdir "$topdir" 2>/dev/null || true
+          done
+          rm -rf ~/.local/share/python-for-android/build/libs_collections/
+          echo "Full build cache wipe done."
 
           echo "=== verify patch installed ==="
           python -c "import sys; sys.path.insert(0,'.github/ci_patch'); import ci_patch; import pythonforandroid.recipe as r; print('Recipe.download_if_necessary:', r.Recipe.download_if_necessary)"
