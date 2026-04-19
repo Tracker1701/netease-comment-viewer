@@ -368,34 +368,12 @@ jobs:
           echo "Build cache wiped."
 
           echo "=== verify patch installed ==="
-          python -c "
-import sys; sys.path.insert(0,'.github/ci_patch')
-import ci_patch
-import pythonforandroid.recipe as r
-print('Recipe.download_if_necessary:', r.Recipe.download_if_necessary)
-"
+          python -c "import sys; sys.path.insert(0,'.github/ci_patch'); import ci_patch; import pythonforandroid.recipe as r; print('Recipe.download_if_necessary:', r.Recipe.download_if_necessary)"
 
           echo "=== build APK with p4a toolchain ==="
           # IMPORTANT: import ci_patch BEFORE running p4a toolchain so the patch
           # is installed before p4a's Recipe class is ever referenced.
-          python -c "
-import sys
-sys.path.insert(0, '.github/ci_patch')
-import ci_patch
-from pythonforandroid.toolchain import main
-import sys
-sys.argv = ['',
-  'apk',
-  '--debug',
-  '--bootstrap', 'sdl2',
-  '--android-api', '34',
-  '--ndk-api', '21',
-  '--requirements', 'python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3',
-  '--arch', 'arm64-v8a',
-  '--arch', 'armeabi-v7a',
-]
-main()
-" 2>&1 | tee buildozer-ci.log
+          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3','--arch','arm64-v8a','--arch','armeabi-v7a']; main()" 2>&1 | tee buildozer-ci.log
 
           echo "=== search APK after build ==="
           # p4a toolchain.py puts APKs in .buildozer/android/platform/build/dists/{app_name}/bin/
