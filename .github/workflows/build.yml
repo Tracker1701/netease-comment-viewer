@@ -135,6 +135,11 @@ jobs:
           cat > .github/ci_patch/sitecustomize.py << 'PYEOF'
           import os
           import time
+          import posixpath
+
+          # Fixed at script injection time — the cwd when p4a/buildozer is launched.
+          # All packages_path operations are resolved relative to this.
+          _LAUNCH_DIR = os.path.abspath(os.getcwd())
 
           def _install_patch():
               try:
@@ -144,8 +149,7 @@ jobs:
                   return
 
               Recipe = p4a_r.Recipe
-              original = Recipe.download_file
-              if getattr(original, "_ci_patched", False):
+              if getattr(Recipe.download_if_necessary, "_ci_patched", False):
                   return
 
               UA = (
@@ -214,21 +218,47 @@ jobs:
                   except Exception:
                       return False
 
-              def patched_download_file(self, url, target, cwd=None):
-                  if not isinstance(url, str) or not url.startswith(("http://", "https://")):
-                      return original(self, url, target, cwd=cwd)
+              # ------------------------------------------------------------------
+              # PATCH 1: download_if_necessary
+              #   - download to packages/{name}/  (where p4a expects it)
+              #   - write .mark-{filename} so p4a skips re-download on next run
+              # ------------------------------------------------------------------
+              _orig_dlin = Recipe.download_if_necessary
 
-                  target_path = os.path.join(cwd, target) if cwd else target
-                  target_path = os.path.abspath(target_path)
-                  os.makedirs(os.path.dirname(target_path), exist_ok=True)
+              def _patched_dlin(self, arch):
+                  # Use versioned_url to derive the actual filename to download.
+                  # self.versioned_url has {version} already substituted.
+                  filename = posixpath.basename(self.versioned_url.split("?")[0])
+
+                  # Resolve packages_path against _LAUNCH_DIR to avoid p4a's
+                  # current_directory() switching cwd and breaking relative paths.
+                  raw_pkg_path = getattr(self.ctx, "packages_path", "packages")
+                  if os.path.isabs(raw_pkg_path):
+                      pkg_dir = os.path.join(raw_pkg_path, self.name)
+                  else:
+                      pkg_dir = os.path.join(_LAUNCH_DIR, raw_pkg_path, self.name)
+
+                  os.makedirs(pkg_dir, exist_ok=True)
+                  target = os.path.join(pkg_dir, filename)
+                  target_abs = os.path.abspath(target)
+
+                  mark_path = os.path.join(pkg_dir, ".mark-" + filename)
+                  mark_abs = os.path.abspath(mark_path)
+
+                  # Skip if already marked as downloaded
+                  if os.path.isfile(mark_abs):
+                      print(f"[patch-dl] skip (marked): {filename}", flush=True)
+                      return
+
+                  print(f"[patch-dl] {self.versioned_url} -> {target_abs}", flush=True)
 
                   last_err = None
-                  for candidate in route_mirrors(url):
-                      print(f"[patch-dl] trying: {candidate}", flush=True)
+                  for candidate in route_mirrors(self.versioned_url):
+                      print(f"  [patch-dl] trying: {candidate}", flush=True)
                       for attempt in range(5):
                           try:
-                              if os.path.exists(target_path):
-                                  os.remove(target_path)
+                              if os.path.exists(target_abs):
+                                  os.remove(target_abs)
 
                               with requests.get(
                                   candidate,
@@ -238,37 +268,95 @@ jobs:
                                   stream=True,
                               ) as r:
                                   r.raise_for_status()
-                                  with open(target_path, "wb") as f:
+                                  with open(target_abs, "wb") as f:
                                       for chunk in r.iter_content(chunk_size=65536):
                                           if chunk:
                                               f.write(chunk)
 
-                              if not os.path.isfile(target_path):
-                                  raise RuntimeError(f"download target not created: {target_path}")
+                              if not os.path.isfile(target_abs):
+                                  raise RuntimeError(f"download target not created: {target_abs}")
 
-                              if os.path.getsize(target_path) < 4096 and looks_like_html(target_path):
+                              sz = os.path.getsize(target_abs)
+                              if sz < 4096 and looks_like_html(target_abs):
                                   raise RuntimeError("mirror returned HTML instead of archive")
 
-                              print(f"[patch-dl] OK -> {target_path}", flush=True)
-                              return target_path
+                              print(f"  [patch-dl] OK {sz}B: {target_abs}", flush=True)
+
+                              # Write .mark file so p4a won't re-trigger download
+                              with open(mark_abs, "w") as mf:
+                                  mf.write(candidate)
+                              os.sync()
+
+                              return
 
                           except Exception as e:
                               last_err = e
-                              print(f"[patch-dl] retry {attempt + 1}/5 failed: {e}", flush=True)
+                              print(f"  [patch-dl] retry {attempt + 1}/5 failed: {e}", flush=True)
                               if attempt < 4:
                                   time.sleep(2 ** attempt)
 
-                      print(f"[patch-dl] mirror exhausted: {candidate}", flush=True)
+                      print(f"  [patch-dl] mirror exhausted: {candidate}", flush=True)
 
-                  raise last_err if last_err else RuntimeError(f"failed to download: {url}")
+                  raise last_err if last_err else RuntimeError(f"failed to download: {self.versioned_url}")
 
-              patched_download_file._ci_patched = True
-              Recipe.download_file = patched_download_file
+              _patched_dlin._ci_patched = True
+              Recipe.download_if_necessary = _patched_dlin
+
+              # ------------------------------------------------------------------
+              # PATCH 2: unpack
+              #   - redirect archive_path to packages/{name}/  (where we downloaded)
+              #   - so shutil.unpack_archive finds the file regardless of cwd
+              # ------------------------------------------------------------------
+              _orig_unpack = Recipe.unpack
+
+              def _patched_unpack(self, arch):
+                  # Build the redirected archive path: packages/{name}/{filename}
+                  filename = posixpath.basename(self.versioned_url.split("?")[0])
+                  raw_pkg_path = getattr(self.ctx, "packages_path", "packages")
+                  if os.path.isabs(raw_pkg_path):
+                      pkg_dir = os.path.join(raw_pkg_path, self.name)
+                  else:
+                      pkg_dir = os.path.join(_LAUNCH_DIR, raw_pkg_path, self.name)
+                  redirected = os.path.abspath(os.path.join(pkg_dir, filename))
+
+                  if not os.path.isfile(redirected):
+                      # Fall back to original path (shouldn't happen)
+                      print(f"[patch-unpack] redirect not found, using original: {filename}", flush=True)
+                      return _orig_unpack(self, arch)
+
+                  print(f"[patch-unpack] redirecting {filename} -> {redirected}", flush=True)
+                  # Call the original unpack with a monkey-patched archive path
+                  import shutil
+                  build_dir = self.get_build_dir(arch)
+                  extract_to = os.path.join(build_dir, "temp_extract_" + self.name)
+                  os.makedirs(extract_to, exist_ok=True)
+                  shutil.unpack_archive(redirected, extract_to)
+                  # Move contents up one level (standard p4a behaviour)
+                  inner = os.listdir(extract_to)
+                  if len(inner) == 1:
+                      inner_path = os.path.join(extract_to, inner[0])
+                      if os.path.isdir(inner_path):
+                          for item in os.listdir(inner_path):
+                              os.rename(
+                                  os.path.join(inner_path, item),
+                                  os.path.join(build_dir, item),
+                              )
+                          os.rmdir(inner_path)
+                      else:
+                          os.rename(inner_path, os.path.join(build_dir, inner[0]))
+                  for item in os.listdir(extract_to):
+                      os.rename(os.path.join(extract_to, item), os.path.join(build_dir, item))
+                  os.rmdir(extract_to)
+
+              _orig_unpack._ci_patched = True
+              Recipe.unpack = _patched_unpack
 
           try:
               _install_patch()
           except Exception as e:
-              print(f"[sitecustomize] patch skipped: {e}", flush=True)
+              import traceback
+              traceback.print_exc()
+              print(f"[sitecustomize] patch error: {e}", flush=True)
           PYEOF
 
       - name: Build debug APK
