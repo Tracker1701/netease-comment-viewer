@@ -263,12 +263,14 @@ jobs:
               def _do_unpack(recipe_self, arch):
                   filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
                   redirected = os.path.abspath(os.path.join(_get_pkg_dir(recipe_self), filename))
-                  build_dir = recipe_self.get_build_dir(arch)
+                  raw_build_dir = recipe_self.get_build_dir(arch)
+                  build_dir = os.path.abspath(raw_build_dir) if os.path.isabs(raw_build_dir) else os.path.join(_LAUNCH_DIR, raw_build_dir)
                   extract_to = os.path.join(build_dir, "temp_extract_" + recipe_self.name)
                   if os.path.exists(extract_to):
                       shutil.rmtree(extract_to)
                   os.makedirs(extract_to, exist_ok=True)
                   print(f"[ci-patch-unpack] extracting {redirected} -> {extract_to}", flush=True)
+                  print(f"[ci-patch-unpack] build_dir={build_dir} raw={raw_build_dir}", flush=True)
                   shutil.unpack_archive(redirected, extract_to)
                   inner = os.listdir(extract_to)
                   print(f"[ci-patch-unpack] inner contents: {inner}", flush=True)
