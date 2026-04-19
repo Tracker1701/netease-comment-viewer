@@ -156,16 +156,15 @@ jobs:
           # 3. cwd changes across download/unpack phases don't cause path mismatches
           _orig_din = p4a_r.Recipe.download_if_necessary
           def patched_download_if_necessary(self):
-              url = getattr(self, "url", None) or self.versioned_url
+              # versioned_url already has {version} substituted; use it as the
+              # authoritative URL.  Fall back to self.url only if versioned_url
+              # is absent (shouldn't happen in practice).
+              url = self.versioned_url
               if not url:
                   return
-              # Derive filename from the URL basename (not all recipes have self.filename).
+              # Derive filename from the already-versioned URL basename.
               import posixpath as _pp
               filename = _pp.basename(url.split("?")[0])
-              # Resolve version placeholders in filename so route_mirrors can match.
-              versioned_filename = self.get_versioned_filename(filename)
-              if versioned_filename != filename:
-                  filename = versioned_filename
               # Determine where the recipe stores its downloaded files.
               pkg_dir = getattr(self.ctx, "packages_path", None)
               if pkg_dir:
