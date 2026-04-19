@@ -365,18 +365,33 @@ jobs:
                       return _orig_unpack(self, arch)
 
                   print(f"[patch-unpack] redirecting {filename} -> {redirected}", flush=True)
+                  # DEBUG: inspect zip contents
+                  import zipfile
+                  try:
+                      with zipfile.ZipFile(redirected, "r") as zf:
+                          names = zf.namelist()
+                          print(f"[patch-unpack] zip contents ({len(names)} entries): {names[:10]}...", flush=True)
+                  except Exception as ez:
+                      print(f"[patch-unpack] zip inspection failed: {ez}", flush=True)
+
                   # Call the original unpack with a monkey-patched archive path
                   import shutil
                   build_dir = self.get_build_dir(arch)
                   extract_to = os.path.join(build_dir, "temp_extract_" + self.name)
+                  if os.path.exists(extract_to):
+                      shutil.rmtree(extract_to)
                   os.makedirs(extract_to, exist_ok=True)
                   shutil.unpack_archive(redirected, extract_to)
+                  print(f"[patch-unpack] extracted to {extract_to}, listing:", flush=True)
+                  print(f"  {os.listdir(extract_to)}", flush=True)
                   # Move contents up one level (standard p4a behaviour)
                   inner = os.listdir(extract_to)
                   if len(inner) == 1:
                       inner_path = os.path.join(extract_to, inner[0])
                       if os.path.isdir(inner_path):
-                          for item in os.listdir(inner_path):
+                          inner_items = os.listdir(inner_path)
+                          print(f"[patch-unpack] single inner dir '{inner[0]}', moving: {inner_items}", flush=True)
+                          for item in inner_items:
                               os.rename(
                                   os.path.join(inner_path, item),
                                   os.path.join(build_dir, item),
@@ -387,6 +402,7 @@ jobs:
                   for item in os.listdir(extract_to):
                       os.rename(os.path.join(extract_to, item), os.path.join(build_dir, item))
                   os.rmdir(extract_to)
+                  print(f"[patch-unpack] build_dir contents after move: {os.listdir(build_dir)}", flush=True)
 
               _orig_unpack._ci_patched = True
               Recipe.unpack = _patched_unpack
