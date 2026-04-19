@@ -282,10 +282,8 @@ jobs:
                   os.rmdir(extract_to)
                   print(f"[ci-patch] done: {os.listdir(build_dir)[:5]}", flush=True)
 
-              def _do_unpack_all_archs(recipe_self):
-                  """Download finished: extract source to every arch-specific build_dir."""
-                  filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
-                  redirected = os.path.abspath(os.path.join(_get_pkg_dir(recipe_self), filename))
+              def _do_unpack_all_archs(recipe_self, redirected):
+                  """Extract source archive to every arch-specific build_dir."""
                   ctx = getattr(recipe_self, "ctx", None)
                   if ctx and hasattr(ctx, "archs") and ctx.archs:
                       archs_to_unpack = ctx.archs
@@ -294,7 +292,11 @@ jobs:
                   for arch in archs_to_unpack:
                       raw_bd = recipe_self.get_build_dir(arch)
                       build_dir = os.path.abspath(raw_bd) if os.path.isabs(raw_bd) else os.path.join(_LAUNCH_DIR, raw_bd)
-                      print(f"[ci-patch] unpack_all {recipe_self.name} for arch={arch} build_dir={build_dir}", flush=True)
+                      # Skip if build_dir already has content (already unpacked for this arch)
+                      if os.path.isdir(build_dir) and os.listdir(build_dir):
+                          print(f"[ci-patch] skip unpack for {recipe_self.name}/{arch}: build_dir has content", flush=True)
+                          continue
+                      print(f"[ci-patch] unpack {recipe_self.name} -> {arch} at {build_dir}", flush=True)
                       _unpack_to_build_dir(redirected, build_dir)
 
               _orig_dlin = Recipe.download_if_necessary
@@ -309,43 +311,40 @@ jobs:
                   pkg_dir = _get_pkg_dir(recipe_self)
                   os.makedirs(pkg_dir, exist_ok=True)
                   target_abs = os.path.abspath(os.path.join(pkg_dir, filename))
-                  mark_abs = os.path.abspath(os.path.join(pkg_dir, ".mark-" + filename))
-                  if os.path.isfile(mark_abs):
-                      print(f"[ci-patch-dlin] skip (marked): {filename}", flush=True)
-                      _do_unpack_all_archs(recipe_self)
-                      return
-                  print(f"[ci-patch-dlin] downloading {recipe_self.versioned_url} -> {target_abs}", flush=True)
-                  last_err = None
-                  for candidate in route_mirrors(recipe_self.versioned_url):
-                      for attempt in range(5):
-                          try:
-                              if os.path.exists(target_abs):
-                                  os.remove(target_abs)
-                              with requests.get(candidate, headers={"User-Agent": UA},
-                                                timeout=(30, 180), allow_redirects=True, stream=True) as r:
-                                  r.raise_for_status()
+                  # Check archive directly (no per-arch mark file, avoids double-call skip bug)
+                  if os.path.isfile(target_abs) and os.path.getsize(target_abs) >= 4096 and not looks_like_html(target_abs):
+                      print(f"[ci-patch-dlin] using cached archive: {target_abs}", flush=True)
+                  else:
+                      print(f"[ci-patch-dlin] downloading {recipe_self.versioned_url} -> {target_abs}", flush=True)
+                      last_err = None
+                      for candidate in route_mirrors(recipe_self.versioned_url):
+                          for attempt in range(5):
+                              try:
+                                  if os.path.exists(target_abs):
+                                      os.remove(target_abs)
+                                  with requests.get(candidate, headers={"User-Agent": UA},
+                                                    timeout=(30, 180), allow_redirects=True, stream=True) as r:
+                                      r.raise_for_status()
                                   with open(target_abs, "wb") as f:
                                       for chunk in r.iter_content(chunk_size=65536):
                                           if chunk:
                                               f.write(chunk)
-                              sz = os.path.getsize(target_abs)
-                              if sz < 4096 and looks_like_html(target_abs):
-                                  raise RuntimeError("mirror returned HTML")
-                              print(f"[ci-patch-dlin] OK {sz}B: {candidate}", flush=True)
-                              with open(mark_abs, "w") as mf:
-                                  mf.write(candidate)
-                              os.sync()
-                              _do_unpack_all_archs(recipe_self)
-                              return
-                          except Exception as e:
-                              last_err = e
-                              print(f"[ci-patch-dlin] retry {attempt+1}/5 failed: {e}", flush=True)
-                              if attempt < 4:
-                                  time.sleep(2 ** attempt)
-                  raise last_err
+                                  sz = os.path.getsize(target_abs)
+                                  if sz < 4096 and looks_like_html(target_abs):
+                                      raise RuntimeError("mirror returned HTML")
+                                  print(f"[ci-patch-dlin] OK {sz}B: {candidate}", flush=True)
+                                  os.sync()
+                                  break
+                              except Exception as e:
+                                  last_err = e
+                                  print(f"[ci-patch-dlin] retry {attempt+1}/5 failed: {e}", flush=True)
+                                  if attempt < 4:
+                                      time.sleep(2 ** attempt)
+                          else:
+                              raise last_err
+                  # Always unpack for all archs (skip arch whose build_dir already has content)
+                  _do_unpack_all_archs(recipe_self, target_abs)
 
-              # Only patch download_if_necessary. unpack is NOT patched — we pre-populate
-              # ALL arch build_dirs at download time, so unpack is never needed.
               Recipe.download_if_necessary = _patched_dlin
               print("[ci-patch] patches installed successfully", flush=True)
 
