@@ -252,7 +252,6 @@ jobs:
                   return os.path.join(_LAUNCH_DIR, raw_pkg_path, recipe_self.name)
 
               def _safe_move(src, dst):
-                  # Remove existing dst first (shutil.move fails if dst is an existing dir)
                   if os.path.exists(dst):
                       if os.path.isdir(dst):
                           shutil.rmtree(dst)
@@ -260,20 +259,16 @@ jobs:
                           os.remove(dst)
                   shutil.move(src, dst)
 
-              def _do_unpack(recipe_self, arch):
-                  filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
-                  redirected = os.path.abspath(os.path.join(_get_pkg_dir(recipe_self), filename))
-                  raw_build_dir = recipe_self.get_build_dir(arch)
-                  build_dir = os.path.abspath(raw_build_dir) if os.path.isabs(raw_build_dir) else os.path.join(_LAUNCH_DIR, raw_build_dir)
-                  extract_to = os.path.join(build_dir, "temp_extract_" + recipe_self.name)
+              def _unpack_to_build_dir(redirected, build_dir):
+                  """Extract archive to build_dir, flatten single-wrapper dir."""
+                  extract_to = os.path.join(build_dir, "temp_extract")
                   if os.path.exists(extract_to):
                       shutil.rmtree(extract_to)
                   os.makedirs(extract_to, exist_ok=True)
-                  print(f"[ci-patch-unpack] extracting {redirected} -> {extract_to}", flush=True)
-                  print(f"[ci-patch-unpack] build_dir={build_dir} raw={raw_build_dir}", flush=True)
+                  print(f"[ci-patch] extracting {redirected} -> {extract_to}", flush=True)
                   shutil.unpack_archive(redirected, extract_to)
                   inner = os.listdir(extract_to)
-                  print(f"[ci-patch-unpack] inner contents: {inner}", flush=True)
+                  print(f"[ci-patch] inner: {inner}", flush=True)
                   if len(inner) == 1:
                       inner_path = os.path.join(extract_to, inner[0])
                       if os.path.isdir(inner_path):
@@ -285,14 +280,30 @@ jobs:
                   for item in os.listdir(extract_to):
                       _safe_move(os.path.join(extract_to, item), os.path.join(build_dir, item))
                   os.rmdir(extract_to)
-                  print(f"[ci-patch-unpack] done, build_dir: {os.listdir(build_dir)}", flush=True)
+                  print(f"[ci-patch] done: {os.listdir(build_dir)[:5]}", flush=True)
+
+              def _do_unpack_all_archs(recipe_self):
+                  """Download finished: extract source to every arch-specific build_dir."""
+                  filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
+                  redirected = os.path.abspath(os.path.join(_get_pkg_dir(recipe_self), filename))
+                  ctx = getattr(recipe_self, "ctx", None)
+                  if ctx and hasattr(ctx, "archs") and ctx.archs:
+                      archs_to_unpack = ctx.archs
+                  else:
+                      archs_to_unpack = ["arm64-v8a", "armeabi-v7a"]
+                  for arch in archs_to_unpack:
+                      raw_bd = recipe_self.get_build_dir(arch)
+                      build_dir = os.path.abspath(raw_bd) if os.path.isabs(raw_bd) else os.path.join(_LAUNCH_DIR, raw_bd)
+                      print(f"[ci-patch] unpack_all {recipe_self.name} for arch={arch} build_dir={build_dir}", flush=True)
+                      _unpack_to_build_dir(redirected, build_dir)
 
               _orig_dlin = Recipe.download_if_necessary
-              _orig_unpack = Recipe.unpack
 
               def _patched_dlin(recipe_self, arch=None):
-                  print(f"[ci-patch-dlin] ENTER recipe={getattr(recipe_self,'name','?')} arch={arch}", flush=True)
+                  recipe_name = getattr(recipe_self, "name", "?")
+                  print(f"[ci-patch-dlin] ENTER recipe={recipe_name} arch={arch}", flush=True)
                   if not getattr(recipe_self, "url", None):
+                      print(f"[ci-patch-dlin] no url attr -> original", flush=True)
                       return _orig_dlin(recipe_self)
                   filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
                   pkg_dir = _get_pkg_dir(recipe_self)
@@ -301,6 +312,7 @@ jobs:
                   mark_abs = os.path.abspath(os.path.join(pkg_dir, ".mark-" + filename))
                   if os.path.isfile(mark_abs):
                       print(f"[ci-patch-dlin] skip (marked): {filename}", flush=True)
+                      _do_unpack_all_archs(recipe_self)
                       return
                   print(f"[ci-patch-dlin] downloading {recipe_self.versioned_url} -> {target_abs}", flush=True)
                   last_err = None
@@ -323,7 +335,7 @@ jobs:
                               with open(mark_abs, "w") as mf:
                                   mf.write(candidate)
                               os.sync()
-                              _do_unpack(recipe_self, arch or "arm64-v8a")
+                              _do_unpack_all_archs(recipe_self)
                               return
                           except Exception as e:
                               last_err = e
@@ -332,22 +344,9 @@ jobs:
                                   time.sleep(2 ** attempt)
                   raise last_err
 
-              def _patched_unpack(recipe_self, arch):
-                  recipe_name = getattr(recipe_self, "name", "?")
-                  raw_bd = recipe_self.get_build_dir(arch)
-                  abs_bd = os.path.abspath(raw_bd) if os.path.isabs(raw_bd) else os.path.join(_LAUNCH_DIR, raw_bd)
-                  print(f"[ci-patch-unpack] ENTER recipe={recipe_name} arch={arch} raw_build_dir={raw_bd} abs_build_dir={abs_bd}", flush=True)
-                  if os.path.isdir(abs_bd) and os.listdir(abs_bd):
-                      print(f"[ci-patch-unpack] build_dir already exists and non-empty, skipping: {abs_bd} -> {os.listdir(abs_bd)[:5]}", flush=True)
-                      return
-                  if not getattr(recipe_self, "url", None):
-                      print(f"[ci-patch-unpack] no url attr, calling original unpack", flush=True)
-                      return _orig_unpack(recipe_self, arch)
-                  print(f"[ci-patch-unpack] calling _do_unpack for {recipe_name}", flush=True)
-                  _do_unpack(recipe_self, arch)
-
+              # Only patch download_if_necessary. unpack is NOT patched — we pre-populate
+              # ALL arch build_dirs at download time, so unpack is never needed.
               Recipe.download_if_necessary = _patched_dlin
-              Recipe.unpack = _patched_unpack
               print("[ci-patch] patches installed successfully", flush=True)
 
           install_patch()
