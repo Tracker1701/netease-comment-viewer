@@ -256,7 +256,7 @@ jobs:
               # ------------------------------------------------------------------
               _orig_dlin = Recipe.download_if_necessary
 
-              def _patched_dlin(self, arch):
+              def _patched_dlin(self, arch=None):
                   # Use versioned_url to derive the actual filename to download.
                   # self.versioned_url has {version} already substituted.
                   filename = posixpath.basename(self.versioned_url.split("?")[0])
@@ -424,8 +424,10 @@ jobs:
           echo "=== build APK with p4a toolchain ==="
           python -m pythonforandroid.toolchain apk \
             --debug \
+            --bootstrap sdl2 \
             --android-api 34 \
             --ndk-api 21 \
+            --requirements python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3 \
             --arch arm64-v8a \
             --arch armeabi-v7a \
             2>&1 | tee buildozer-ci.log
