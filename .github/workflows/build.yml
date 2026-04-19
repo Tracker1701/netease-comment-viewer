@@ -9,14 +9,16 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     env:
       ANDROID_API: "34"
       ANDROID_NDK_VERSION: "25.2.9519653"
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      P4A_ANDROID_NDK_API: "21"
       USE_CCACHE: "1"
+      P4A_ANDROID_NDK_API: "21"
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout code
@@ -34,11 +36,23 @@ jobs:
           java-version: "17"
 
       - name: Check required files
+        shell: bash
         run: |
+          set -euxo pipefail
           test -f buildozer.spec || { echo "buildozer.spec not found in repository root"; exit 1; }
 
-      - name: Install system dependencies
+      - name: Show runner Android env
+        shell: bash
         run: |
+          set -euxo pipefail
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls -la /usr/local/lib/android/sdk || true
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y \
             git \
@@ -73,7 +87,10 @@ jobs:
             tk
 
       - name: Prepare Android SDK / NDK
+        shell: bash
         run: |
+          set -euxo pipefail
+
           mkdir -p ~/.android
           touch ~/.android/repositories.cfg
 
@@ -89,15 +106,17 @@ jobs:
           echo "ANDROIDSDK=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
 
       - name: Install Python packages
+        shell: bash
         run: |
+          set -euxo pipefail
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install Cython==0.29.36
-          python -m pip install requests
-          python -m pip install buildozer==1.5.0
-          python -m pip install python-for-android
+          python -m pip install Cython==0.29.36 requests buildozer==1.5.0
+          python -m pip install "git+https://github.com/kivy/python-for-android.git@v2024.01.21"
 
       - name: Create python-for-android download patch
+        shell: bash
         run: |
+          set -euxo pipefail
           mkdir -p .github/ci_patch
           cat > .github/ci_patch/sitecustomize.py << 'PYEOF'
           import os
@@ -239,52 +258,57 @@ jobs:
           PYEOF
 
       - name: Build debug APK
+        shell: bash
         env:
           PYTHONPATH: ${{ github.workspace }}/.github/ci_patch
         run: |
+          set -euxo pipefail
+
           export ANDROIDSDK="${ANDROID_SDK_ROOT}"
           export ANDROIDNDK="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
           export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
           export ANDROID_HOME="${ANDROID_SDK_ROOT}"
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT}"
 
+          python -V
+          pip -V
+          buildozer --version
+
+          buildozer android clean || true
           buildozer -v android debug 2>&1 | tee buildozer-ci.log
+
+          echo "=== search APK after build ==="
+          find . -type f \( -name "*.apk" -o -name "*.aab" \) | sort || true
+          ls -lah bin || true
 
       - name: Collect APKs
         id: collect
-        if: always()
+        if: success()
         shell: bash
         run: |
+          set -euxo pipefail
           mkdir -p dist
           shopt -s nullglob globstar
 
           files=(bin/*.apk .buildozer/**/*.apk)
-          declare -A seen
           found=0
 
           for f in "${files[@]}"; do
-            [ -f "$f" ] || continue
-            abs="$(readlink -f "$f")"
-            if [[ -z "${seen[$abs]}" ]]; then
-              seen[$abs]=1
-              cp "$f" dist/
+            if [[ -f "$f" ]]; then
+              cp -f "$f" dist/
               found=1
             fi
           done
 
-          if [[ "$found" -eq 1 ]]; then
-            echo "apk_found=true" >> "$GITHUB_OUTPUT"
-            echo "=== APKs in dist/ ==="
-            ls -lh dist
-          else
-            echo "apk_found=false" >> "$GITHUB_OUTPUT"
-            echo "No APK found."
-            echo "=== bin ==="
-            find bin -maxdepth 2 -type f 2>/dev/null || true
-            echo "=== search in .buildozer ==="
-            find .buildozer -type f | grep -Ei '\.(apk|aab)$' || true
+          if [[ "$found" -eq 0 ]]; then
+            echo "No APK found after successful build step."
+            find . -type f \( -name "*.apk" -o -name "*.aab" \) | sort || true
             exit 1
           fi
+
+          echo "=== APKs in dist ==="
+          ls -lah dist
+          echo "apk_found=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         if: steps.collect.outputs.apk_found == 'true'
@@ -295,11 +319,25 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            buildozer-ci.log
+            .buildozer/**/*.log
+            .buildozer/android/platform/python-for-android/build/**/build.log
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Show logs on failure
         if: failure()
+        shell: bash
         run: |
-          echo "=== buildozer-ci.log (tail) ==="
-          tail -n 200 buildozer-ci.log 2>/dev/null || true
+          set +e
+          echo "=== buildozer-ci.log tail ==="
+          tail -n 300 buildozer-ci.log 2>/dev/null || true
           echo
-          echo "=== .buildozer logs/files ==="
-          find .buildozer -maxdepth 5 -type f | sort | tail -n 100 || true
+          echo "=== .buildozer log files ==="
+          find .buildozer -type f | sort | tail -n 200 || true
