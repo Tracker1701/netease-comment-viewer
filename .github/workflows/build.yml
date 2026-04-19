@@ -467,8 +467,15 @@ jobs:
           python -c "import pythonforandroid; print('p4a:', pythonforandroid.__version__)"
           python -c "import pythonforandroid.recipe; print('Recipe module OK')"
 
-          echo "=== clean dists ==="
+
+          echo "=== clean dists + wipe build cache ==="
           python -m pythonforandroid.toolchain clean_dists 2>&1 || true
+          # Also wipe the entire build cache to force re-download and re-unpack.
+          # Without this, old (incorrectly unpacked) artifacts in other_builds/
+          # cause ./configure not found errors.
+          rm -rf ~/.local/share/python-for-android/build/other_builds/
+          rm -rf ~/.local/share/python-for-android/build/bootstrap_builds/
+          echo "Build cache wiped."
 
           echo "=== build APK with p4a toolchain ==="
           python -m pythonforandroid.toolchain apk \
