@@ -251,6 +251,15 @@ jobs:
                       return os.path.join(raw_pkg_path, recipe_self.name)
                   return os.path.join(_LAUNCH_DIR, raw_pkg_path, recipe_self.name)
 
+              def _safe_move(src, dst):
+                  # Remove existing dst first (shutil.move fails if dst is an existing dir)
+                  if os.path.exists(dst):
+                      if os.path.isdir(dst):
+                          shutil.rmtree(dst)
+                      else:
+                          os.remove(dst)
+                  shutil.move(src, dst)
+
               def _do_unpack(recipe_self, arch):
                   filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
                   redirected = os.path.abspath(os.path.join(_get_pkg_dir(recipe_self), filename))
@@ -267,12 +276,12 @@ jobs:
                       inner_path = os.path.join(extract_to, inner[0])
                       if os.path.isdir(inner_path):
                           for item in os.listdir(inner_path):
-                              os.rename(os.path.join(inner_path, item), os.path.join(build_dir, item))
+                              _safe_move(os.path.join(inner_path, item), os.path.join(build_dir, item))
                           os.rmdir(inner_path)
                       else:
-                          os.rename(inner_path, os.path.join(build_dir, inner[0]))
+                          _safe_move(inner_path, os.path.join(build_dir, inner[0]))
                   for item in os.listdir(extract_to):
-                      os.rename(os.path.join(extract_to, item), os.path.join(build_dir, item))
+                      _safe_move(os.path.join(extract_to, item), os.path.join(build_dir, item))
                   os.rmdir(extract_to)
                   print(f"[ci-patch-unpack] done, build_dir: {os.listdir(build_dir)}", flush=True)
 
@@ -365,7 +374,10 @@ jobs:
           python -m pythonforandroid.toolchain clean_dists 2>&1 || true
           rm -rf ~/.local/share/python-for-android/build/other_builds/
           rm -rf ~/.local/share/python-for-android/build/bootstrap_builds/
-          echo "Build cache wiped."
+          echo "=== wipe hostpython3 build dir (residual Grammar/Lib/etc cause os.rename errors) ==="
+          rm -rf ~/.local/share/python-for-android/build/other_builds/hostpython3/
+          rm -rf ~/.local/share/python-for-android/build/bootstrap_builds/hostpython3/
+          echo "Build Cache wiped."
 
           echo "=== verify patch installed ==="
           python -c "import sys; sys.path.insert(0,'.github/ci_patch'); import ci_patch; import pythonforandroid.recipe as r; print('Recipe.download_if_necessary:', r.Recipe.download_if_necessary)"
