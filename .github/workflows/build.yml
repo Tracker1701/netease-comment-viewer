@@ -158,14 +158,6 @@ jobs:
           python -m pip install Cython==0.29.36 requests
           python -m pip install "git+https://github.com/kivy/python-for-android.git@v2024.01.21"
 
-      - name: Install Python packages
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install Cython==0.29.36 requests
-          python -m pip install "git+https://github.com/kivy/python-for-android.git@v2024.01.21"
-
       - name: Create p4a CI patch file
         shell: bash
         run: |
