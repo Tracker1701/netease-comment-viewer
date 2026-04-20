@@ -46,6 +46,9 @@ warn_on_root = 0
 # 架构：同时支持 arm64-v8a 和 armeabi-v7a
 android.archs = arm64-v8a, armeabi-v7a
 
+# 固定 dist 名称，让 p4a 正确复用已有 dist 给不同架构
+dist_name = netease_dist
+
 # 打包方式
 fullscreen = 0
 
