@@ -388,7 +388,7 @@ jobs:
           # IMPORTANT: import ci_patch BEFORE running p4a toolchain so the patch
           # is installed before p4a's Recipe class is ever referenced.
           # Note: kivymd (not KivyMD) so p4a recipe class name lookup matches
-          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,kivymd==1.1.1,pillow,urllib3','--arch','arm64-v8a','--package','org.netease.netease_comment_viewer','--name','netease_comment_viewer','--version','0.1.0']; main()" 2>&1 | tee buildozer-ci.log
+          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,kivymd==1.1.1,pillow,urllib3','--arch','arm64-v8a','--package','org.netease.netease_comment_viewer','--name','netease_comment_viewer','--version','0.1.0','--private','.']; main()" 2>&1 | tee buildozer-ci.log
 
           echo "=== post-build png dir state (armeabi-v7a) ==="
           find ~/.local/share/python-for-android/build/other_builds/png/ -type f -name "configure" 2>/dev/null || echo "no configure found"
