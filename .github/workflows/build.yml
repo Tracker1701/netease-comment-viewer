@@ -188,27 +188,26 @@ jobs:
               MIRROR_GROUPS = {
                   "freetype": [
                       "https://download-mirror.savannah.gnu.org/releases/freetype/freetype-2.10.1.tar.gz",
-                      "https://osdn.net/projects/sfnet_freetype/downloads/freetype2/2.10.1/freetype-2.10.1.tar.gz",
-                      "https://ftp.lip6.fr/pub/pcgs/graphics/freetype/freetype-2.10.1.tar.gz",
                       "https://mirrors.kernel.org/gentoo/distfiles/freetype-2.10.1.tar.gz",
+                      "https://distfiles.gentoo.org/distfiles/freetype-2.10.1.tar.gz",
+                      "https://mirror.rackspace.com/gentoo/distfiles/freetype-2.10.1.tar.gz",
                   ],
                   "libpng": [
                       "https://github.com/glennrp/libpng/archive/v1.6.37.zip",
-                      "https://osdn.net/projects/sfnet_libpng/downloads/libpng16/1.6.37/libpng-1.6.37.tar.gz",
-                      "https://mirror.koddos.net/pub/software/graphics/libpng/libpng-1.6.37.tar.gz",
-                      "https://ftp.lip6.fr/pub/pcgs/graphics/png/libpng-1.6.37.tar.gz",
+                      "https://mirrors.kernel.org/gentoo/distfiles/libpng-1.6.37.tar.gz",
+                      "https://distfiles.gentoo.org/distfiles/libpng-1.6.37.tar.gz",
                   ],
                   "sdl2_mixer": [
                       "https://www.libsdl.org/release/SDL2_mixer-2.6.3.tar.gz",
-                      "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_mixer-2.6.3.tar.gz",
+                      "https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.6.3/SDL2_mixer-2.6.3.tar.gz",
                   ],
                   "sdl2_image": [
                       "https://www.libsdl.org/release/SDL2_image-2.8.0.tar.gz",
-                      "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_image-2.8.0.tar.gz",
+                      "https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.0/SDL2_image-2.8.0.tar.gz",
                   ],
                   "sdl2_ttf": [
                       "https://www.libsdl.org/release/SDL2_ttf-2.20.2.tar.gz",
-                      "https://ftp.lip6.fr/pub/pcgs/sdl2/SDL2_ttf-2.20.2.tar.gz",
+                      "https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.20.2/SDL2_ttf-2.20.2.tar.gz",
                   ],
               }
 
@@ -314,36 +313,54 @@ jobs:
                   os.makedirs(pkg_dir, exist_ok=True)
                   target_abs = os.path.abspath(os.path.join(pkg_dir, filename))
                   # Check archive directly (no per-arch mark file, avoids double-call skip bug)
-                  if os.path.isfile(target_abs) and os.path.getsize(target_abs) >= 4096 and not looks_like_html(target_abs):
-                      print(f"[ci-patch-dlin] using cached archive: {target_abs}", flush=True)
+                  def _archive_valid(path):
+                      """Return True only if the file exists, is >= 4096 bytes, and not an HTML error page."""
+                      try:
+                          return os.path.isfile(path) and os.path.getsize(path) >= 4096 and not looks_like_html(path)
+                      except Exception:
+                          return False
+
+                  if _archive_valid(target_abs):
+                      print(f"[ci-patch-dlin] using cached archive: {target_abs} ({os.path.getsize(target_abs)}B)", flush=True)
                   else:
+                      if os.path.exists(target_abs):
+                          print(f"[ci-patch-dlin] stale/invalid cached file removed: {target_abs}", flush=True)
+                          os.remove(target_abs)
                       print(f"[ci-patch-dlin] downloading {recipe_self.versioned_url} -> {target_abs}", flush=True)
                       last_err = None
+                      downloaded_ok = False
                       for candidate in route_mirrors(recipe_self.versioned_url):
-                          for attempt in range(5):
+                          candidate_ok = False
+                          for attempt in range(3):
                               try:
                                   if os.path.exists(target_abs):
                                       os.remove(target_abs)
                                   with requests.get(candidate, headers={"User-Agent": UA},
                                                     timeout=(30, 180), allow_redirects=True, stream=True) as r:
                                       r.raise_for_status()
-                                  with open(target_abs, "wb") as f:
-                                      for chunk in r.iter_content(chunk_size=65536):
-                                          if chunk:
-                                              f.write(chunk)
+                                      with open(target_abs, "wb") as f:
+                                          for chunk in r.iter_content(chunk_size=65536):
+                                              if chunk:
+                                                  f.write(chunk)
+                                  if not _archive_valid(target_abs):
+                                      sz = os.path.getsize(target_abs) if os.path.exists(target_abs) else 0
+                                      raise RuntimeError(f"downloaded file invalid (size={sz}B, may be HTML or empty)")
                                   sz = os.path.getsize(target_abs)
-                                  if sz < 4096 and looks_like_html(target_abs):
-                                      raise RuntimeError("mirror returned HTML")
-                                  print(f"[ci-patch-dlin] OK {sz}B: {candidate}", flush=True)
+                                  print(f"[ci-patch-dlin] OK {sz}B from {candidate}", flush=True)
                                   os.sync()
+                                  candidate_ok = True
+                                  downloaded_ok = True
                                   break
                               except Exception as e:
                                   last_err = e
-                                  print(f"[ci-patch-dlin] retry {attempt+1}/5 failed: {e}", flush=True)
-                                  if attempt < 4:
+                                  print(f"[ci-patch-dlin] candidate {candidate} attempt {attempt+1}/3 failed: {e}", flush=True)
+                                  if attempt < 2:
                                       time.sleep(2 ** attempt)
-                          else:
-                              raise last_err
+                          if candidate_ok:
+                              break  # success, stop trying more candidates
+                          # else: try next candidate
+                      if not downloaded_ok:
+                          raise RuntimeError(f"All download candidates failed for {recipe_self.versioned_url}. Last error: {last_err}")
                   # Always unpack for all archs (skip arch whose build_dir already has content)
                   _do_unpack_all_archs(recipe_self, target_abs)
 
