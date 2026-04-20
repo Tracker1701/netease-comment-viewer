@@ -143,33 +143,45 @@ def _resolve_dns(host: str) -> str | None:
     return None
 
 
-def _ip_fallback(url: str, hostname: str) -> dict:
+def _java_get(url: str) -> dict:
     """
-    DNS 解析完全失败时的最后手段：硬编码已知 IP 直连。
-    Android SELinux/p4a Python 可能无法解析任何 hostname（net.dns1 为空）。
-    通过 HTTPS 直连 IP + 禁用证书验证 + Host header 重定向绕过。
+    通过 pyjnius 调用 Java java.net.URL 发起请求。
+    Java 层自动继承 Android 系统代理设置（SOCKS/HTTP 代理），
+    绕过 Python urllib 在华为鸿蒙上 TCP connect EPERM 的问题。
     """
-    import ssl as _ssl
-    # 已知 music.163.com CDN IP（来自 nslookup，CDN IP 相对稳定）
-    KNOWN_IPS = {
-        'music.163.com': ['106.38.195.163', '223.19.191.97'],
-    }
-    ips = KNOWN_IPS.get(hostname, [])
-    for ip in ips:
-        try:
-            new_url = url.replace(hostname, ip)
-            new_req = urllib.request.Request(new_url, headers=HEADERS)
-            new_req.add_header('Host', hostname)
-            # CDN IP 的 SSL 证书是签给域名的，直连 IP 会证书不匹配，禁用验证
-            ctx = _ssl._create_unverified_context()
-            with urllib.request.urlopen(new_req, timeout=15, context=ctx) as resp:
-                result = json.loads(resp.read().decode('utf-8'))
-                _logger.info(f'[API] GET (IP-fallback {ip}) {url[:60]} -> code={resp.status}')
-                return result
-        except Exception as e2:
-            _logger.warning(f'[API] IP-fallback {ip} FAILED: {e2}')
-            continue
-    return {}
+    try:
+        from jnius import autoclass
+        URL = autoclass('java.net.URL')
+        HttpURLConnection = autoclass('java.net.HttpURLConnection')
+
+        java_url = URL(url)
+        conn = java_url.openConnection()
+        conn.setConnectTimeout(20000)
+        conn.setReadTimeout(20000)
+        for k, v in HEADERS.items():
+            conn.setRequestProperty(k, v)
+        conn.connect()
+
+        code = conn.getResponseCode()
+        # 读取响应体
+        import io
+        stream = conn.getInputStream() if code < 400 else conn.getErrorStream()
+        data = b''
+        buf = bytearray(4096)
+        while True:
+            n = stream.read(buf)
+            if n <= 0:
+                break
+            data += buf[:n]
+        stream.close()
+        conn.disconnect()
+
+        result = json.loads(data.decode('utf-8'))
+        _logger.info(f'[API-JAVA] GET {url[:60]} -> code={code}')
+        return result
+    except Exception as e:
+        _logger.warning(f'[API-JAVA] FAILED: {e}')
+        return {}
 
 
 def get_json(url: str) -> dict:
@@ -183,15 +195,13 @@ def get_json(url: str) -> dict:
     except Exception as e:
         err_str = str(e)
         if 'No address associated with hostname' in err_str or \
-           'Name or service not known' in err_str:
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            result = _ip_fallback(url, parsed.hostname)
+           'Name or service not known' in err_str or \
+           'Operation not permitted' in err_str:
+            # Python urllib 被系统限制时，用 Java 网络栈（自动走系统代理）
+            result = _java_get(url)
             if result:
                 return result
-            _logger.warning(f'[API] All fallbacks failed for {url[:60]}')
-        else:
-            _logger.warning(f'[API] GET {url[:60]} FAILED: {e}')
+        _logger.warning(f'[API] GET {url[:60]} FAILED: {e}')
         return {}
 
 
