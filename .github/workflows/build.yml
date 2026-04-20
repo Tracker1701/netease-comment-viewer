@@ -193,6 +193,7 @@ jobs:
                       "https://mirrors.kernel.org/gentoo/distfiles/freetype-2.10.1.tar.gz",
                   ],
                   "libpng": [
+                      "https://github.com/glennrp/libpng/archive/v1.6.37.zip",
                       "https://osdn.net/projects/sfnet_libpng/downloads/libpng16/1.6.37/libpng-1.6.37.tar.gz",
                       "https://mirror.koddos.net/pub/software/graphics/libpng/libpng-1.6.37.tar.gz",
                       "https://ftp.lip6.fr/pub/pcgs/graphics/png/libpng-1.6.37.tar.gz",
@@ -218,6 +219,7 @@ jobs:
                   "downloads.sourceforge.net/project/freetype": "freetype",
                   "sourceforge.net/projects/libpng": "libpng",
                   "downloads.sourceforge.net/project/libpng": "libpng",
+                  "github.com/glennrp/libpng": "libpng",
                   "github.com/libsdl-org/SDL_mixer": "sdl2_mixer",
                   "github.com/libsdl-org/SDL_image": "sdl2_image",
                   "github.com/libsdl-org/SDL_ttf": "sdl2_ttf",
@@ -268,19 +270,19 @@ jobs:
                   print(f"[ci-patch] extracting {redirected} -> {extract_to}", flush=True)
                   shutil.unpack_archive(redirected, extract_to)
                   inner = os.listdir(extract_to)
-                  print(f"[ci-patch] inner: {inner}", flush=True)
-                  if len(inner) == 1:
-                      inner_path = os.path.join(extract_to, inner[0])
-                      if os.path.isdir(inner_path):
-                          for item in os.listdir(inner_path):
-                              _safe_move(os.path.join(inner_path, item), os.path.join(build_dir, item))
-                          os.rmdir(inner_path)
-                      else:
-                          _safe_move(inner_path, os.path.join(build_dir, inner[0]))
-                  for item in os.listdir(extract_to):
-                      _safe_move(os.path.join(extract_to, item), os.path.join(build_dir, item))
-                  os.rmdir(extract_to)
-                  print(f"[ci-patch] done: {os.listdir(build_dir)[:5]}", flush=True)
+                  print(f"[ci-patch] inner after unpack: {inner}", flush=True)
+                  if len(inner) == 1 and os.path.isdir(os.path.join(extract_to, inner[0])):
+                      # Single wrapper directory (common GitHub archive pattern): flatten it
+                      inner_dir = os.path.join(extract_to, inner[0])
+                      for item in os.listdir(inner_dir):
+                          _safe_move(os.path.join(inner_dir, item), os.path.join(build_dir, item))
+                      shutil.rmtree(extract_to)
+                  else:
+                      # Multiple files or single file: move everything directly
+                      for item in inner:
+                          _safe_move(os.path.join(extract_to, item), os.path.join(build_dir, item))
+                      shutil.rmtree(extract_to, ignore_errors=True)
+                  print(f"[ci-patch] done: {os.listdir(build_dir)[:8]}", flush=True)
 
               def _do_unpack_all_archs(recipe_self, redirected):
                   """Extract source archive to every arch-specific build_dir."""
