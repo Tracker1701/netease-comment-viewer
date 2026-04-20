@@ -407,8 +407,8 @@ jobs:
           set -euxo pipefail
           mkdir -p dist
           shopt -s nullglob globstar
-          # p4a toolchain.py outputs to .buildozer/android/platform/build/dists/{name}/bin/
-          files=(.buildozer/android/platform/build/dists/*/bin/*.apk .buildozer/**/*.apk)
+          # p4a v2024.01 puts APK in repo root (unnamed_dist_1-*.apk) or .buildozer/ subdir
+          files=(./*.apk .buildozer/android/platform/build/dists/*/bin/*.apk .buildozer/**/*.apk)
           found=0
 
           for f in "${files[@]}"; do
