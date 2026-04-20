@@ -145,10 +145,52 @@ def _resolve_dns(host: str) -> str | None:
 
 def _java_get(url: str) -> dict:
     """
-    通过 pyjnius 调用 Java java.net.URL 发起请求。
-    Java 层自动继承 Android 系统代理设置（SOCKS/HTTP 代理），
+    通过 pyjnius 调用 Java OkHttp3 发起请求。
+    OkHttp 能正确使用华为 aserviceproxy_s 系统代理（SOCKS/HTTP），
     绕过 Python urllib 在华为鸿蒙上 TCP connect EPERM 的问题。
+    如果 OkHttp 不可用，则 fallback 到 java.net.URL。
     """
+    # 优先用 OkHttp（支持华为 aserviceproxy_s）
+    result = _java_okhttp(url)
+    if result:
+        return result
+    # Fallback：java.net.URL
+    return _java_url(url)
+
+
+def _java_okhttp(url: str) -> dict:
+    """通过 OkHttp 发送请求（华为 aserviceproxy_s 兼容）"""
+    try:
+        from jnius import autoclass
+
+        # OkHttp3 API
+        OkHttpClient = autoclass('okhttp3.OkHttpClient')
+        Request = autoclass('okhttp3.Request')
+        Request.Builder = autoclass('okhttp3.Request.Builder')
+
+        client = OkHttpClient()
+        builder = Request.Builder()
+        for k, v in HEADERS.items():
+            builder.addHeader(k, v)
+        builder.url(url)
+        builder.get()
+        request = builder.build()
+
+        resp = client.newCall(request).execute()
+        code = resp.code()
+        body_bytes = resp.body().bytes()
+        resp.close()
+
+        result = json.loads(body_bytes.decode('utf-8'))
+        _logger.info(f'[API-OkHttp] GET {url[:60]} -> code={code}')
+        return result
+    except Exception as e:
+        _logger.warning(f'[API-OkHttp] failed: {type(e).__name__}: {e}')
+        return {}
+
+
+def _java_url(url: str) -> dict:
+    """通过 java.net.URL 发送请求（fallback）"""
     try:
         from jnius import autoclass
         URL = autoclass('java.net.URL')
@@ -163,8 +205,6 @@ def _java_get(url: str) -> dict:
         conn.connect()
 
         code = conn.getResponseCode()
-        # 读取响应体
-        import io
         stream = conn.getInputStream() if code < 400 else conn.getErrorStream()
         data = b''
         buf = bytearray(4096)
