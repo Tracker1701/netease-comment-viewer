@@ -16,7 +16,7 @@ mainmodule = main
 version = 0.1.0
 
 # 依赖（核心 Kivy + KivyMD）
-requirements = python3,kivy==2.3.0,KivyMD==1.1.1,pillow,urllib3
+requirements = python3,kivy==2.3.0,kivymd==1.1.1,pillow,urllib3
 
 # Android 最低版本
 android.minapi = 21
