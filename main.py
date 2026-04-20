@@ -251,7 +251,7 @@ class AlbumSection(BoxLayout):
             ))
 
 
-class MainScreen(BoxLayout if not USE_KIVYM else object):
+class MainScreen(BoxLayout):
     """主界面"""
 
     def __init__(self, **kwargs):
