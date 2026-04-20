@@ -55,12 +55,6 @@ for _p in _font_names:
     if FONT_PATH:
         break
 
-if FONT_PATH:
-    LabelBase.register('NotoSansSC', FONT_PATH)
-    LabelBase.default_font_name = 'NotoSansSC'
-    _logger.info(f'[FONT] Registered: {FONT_PATH}')
-else:
-    _logger.warning('[FONT] NotoSansSC not found')
 from kivy.clock import Clock
 from kivy.metrics import dp
 
@@ -75,6 +69,13 @@ try:
     USE_KIVYM = True
 except ImportError:
     USE_KIVYM = False
+
+# ── 中文字体注册（必须在 KivyMD import 之后，覆盖其注册的 Roboto）────────
+if FONT_PATH:
+    LabelBase.register('Roboto', FONT_PATH)
+    _logger.info(f'[FONT] Override Roboto with {FONT_PATH}')
+else:
+    _logger.warning('[FONT] NotoSansSC not found')
 
 # ─────────────────────────────────────────────
 # API 核心
