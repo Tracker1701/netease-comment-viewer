@@ -114,8 +114,11 @@ def get_json(url: str) -> dict:
     req = urllib.request.Request(url, headers=HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode('utf-8'))
-    except Exception:
+            result = json.loads(resp.read().decode('utf-8'))
+            _logger.info(f'[API] GET {url[:60]} -> code={resp.status}')
+            return result
+    except Exception as e:
+        _logger.warning(f'[API] GET {url[:60]} FAILED: {e}')
         return {}
 
 
