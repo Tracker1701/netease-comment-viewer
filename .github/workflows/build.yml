@@ -355,10 +355,8 @@ jobs:
           ls -la "$ANDROID_SDK_ROOT/build-tools/" || echo "no build-tools dir"
           ls -la "$ANDROID_SDK_ROOT/platforms/" || echo "no platforms dir"
 
-          echo "=== cd into netease_kivy (source dir with main.py + buildozer.spec) ==="
-          cd netease_kivy
-          pwd
-          ls -la
+          echo "=== verify source files exist at repo root ==="
+          ls -la main.py buildozer.spec
 
           echo "=== ci_patch.py exists? ==="
           ls -la .github/ci_patch/
