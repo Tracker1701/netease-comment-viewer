@@ -164,7 +164,7 @@ jobs:
           set -euxo pipefail
           mkdir -p .github/ci_patch
           cat > .github/ci_patch/ci_patch.py << 'PYEOF'
-          import os, sys, time, posixpath, shutil, zipfile
+          import os, sys, time, posixpath, shutil
 
           # Fixed at script injection time — the cwd when p4a/buildozer is launched.
           _LAUNCH_DIR = os.path.abspath(os.getcwd())
@@ -175,9 +175,7 @@ jobs:
               import requests
               import pythonforandroid.recipe as p4a_r
               Recipe = p4a_r.Recipe
-              print(f"[ci-patch] Recipe class: {Recipe}", flush=True)
-              print(f"[ci-patch] Recipe.download_if_necessary: {Recipe.download_if_necessary}", flush=True)
-              print(f"[ci-patch] installing patch...", flush=True)
+              print(f"[ci-patch] installing download patch...", flush=True)
 
               UA = (
                   "Mozilla/5.0 (X11; Linux x86_64) "
@@ -185,29 +183,31 @@ jobs:
                   "Chrome/124.0.0.0 Safari/537.36"
               )
 
+              # Mirror candidates for unreliable origins.
+              # IMPORTANT: all candidates for a group must yield the SAME file content
+              # (same archive format, same filename when saved to packages/).
+              # Candidates that differ in format are listed last as last-resort fallbacks
+              # and are only used if all same-format mirrors fail.
               MIRROR_GROUPS = {
                   "freetype": [
+                      # .tar.gz mirrors — original is also .tar.gz
                       "https://download-mirror.savannah.gnu.org/releases/freetype/freetype-2.10.1.tar.gz",
                       "https://mirrors.kernel.org/gentoo/distfiles/freetype-2.10.1.tar.gz",
                       "https://distfiles.gentoo.org/distfiles/freetype-2.10.1.tar.gz",
-                      "https://mirror.rackspace.com/gentoo/distfiles/freetype-2.10.1.tar.gz",
                   ],
                   "libpng": [
+                      # original: github.com/glennrp/libpng/archive/v1.6.37.zip
+                      # All mirrors must be .zip so the filename matches what p4a expects
                       "https://github.com/glennrp/libpng/archive/v1.6.37.zip",
-                      "https://mirrors.kernel.org/gentoo/distfiles/libpng-1.6.37.tar.gz",
-                      "https://distfiles.gentoo.org/distfiles/libpng-1.6.37.tar.gz",
                   ],
                   "sdl2_mixer": [
                       "https://www.libsdl.org/release/SDL2_mixer-2.6.3.tar.gz",
-                      "https://github.com/libsdl-org/SDL_mixer/releases/download/release-2.6.3/SDL2_mixer-2.6.3.tar.gz",
                   ],
                   "sdl2_image": [
                       "https://www.libsdl.org/release/SDL2_image-2.8.0.tar.gz",
-                      "https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.0/SDL2_image-2.8.0.tar.gz",
                   ],
                   "sdl2_ttf": [
                       "https://www.libsdl.org/release/SDL2_ttf-2.20.2.tar.gz",
-                      "https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.20.2/SDL2_ttf-2.20.2.tar.gz",
                   ],
               }
 
@@ -225,13 +225,13 @@ jobs:
               }
 
               def route_mirrors(url):
+                  """Return [url] + mirrors for url, deduped."""
                   urls = [url]
                   for key, group in ROUTE_RULES.items():
                       if key in url:
                           urls.extend(MIRROR_GROUPS.get(group, []))
                           break
-                  seen = set()
-                  ordered = []
+                  seen, ordered = set(), []
                   for u in urls:
                       if u not in seen:
                           ordered.append(u)
@@ -241,131 +241,94 @@ jobs:
               def looks_like_html(path):
                   try:
                       with open(path, "rb") as f:
-                          head = f.read(512).lstrip()
-                      return head.startswith(b"<")
+                          return f.read(512).lstrip().startswith(b"<")
+                  except Exception:
+                      return False
+
+              def _archive_valid(path):
+                  try:
+                      return os.path.isfile(path) and os.path.getsize(path) >= 4096 and not looks_like_html(path)
                   except Exception:
                       return False
 
               def _get_pkg_dir(recipe_self):
-                  raw_pkg_path = getattr(recipe_self.ctx, "packages_path", "packages")
-                  if os.path.isabs(raw_pkg_path):
-                      return os.path.join(raw_pkg_path, recipe_self.name)
-                  return os.path.join(_LAUNCH_DIR, raw_pkg_path, recipe_self.name)
-
-              def _safe_move(src, dst):
-                  if os.path.exists(dst):
-                      if os.path.isdir(dst):
-                          shutil.rmtree(dst)
-                      else:
-                          os.remove(dst)
-                  shutil.move(src, dst)
-
-              def _unpack_to_build_dir(redirected, build_dir):
-                  """Extract archive to build_dir, flatten single-wrapper dir."""
-                  extract_to = os.path.join(build_dir, "temp_extract")
-                  if os.path.exists(extract_to):
-                      shutil.rmtree(extract_to)
-                  os.makedirs(extract_to, exist_ok=True)
-                  print(f"[ci-patch] extracting {redirected} -> {extract_to}", flush=True)
-                  shutil.unpack_archive(redirected, extract_to)
-                  inner = os.listdir(extract_to)
-                  print(f"[ci-patch] inner after unpack: {inner}", flush=True)
-                  if len(inner) == 1 and os.path.isdir(os.path.join(extract_to, inner[0])):
-                      # Single wrapper directory (common GitHub archive pattern): flatten it
-                      inner_dir = os.path.join(extract_to, inner[0])
-                      for item in os.listdir(inner_dir):
-                          _safe_move(os.path.join(inner_dir, item), os.path.join(build_dir, item))
-                      shutil.rmtree(extract_to)
-                  else:
-                      # Multiple files or single file: move everything directly
-                      for item in inner:
-                          _safe_move(os.path.join(extract_to, item), os.path.join(build_dir, item))
-                      shutil.rmtree(extract_to, ignore_errors=True)
-                  print(f"[ci-patch] done: {os.listdir(build_dir)[:8]}", flush=True)
-
-              def _do_unpack_all_archs(recipe_self, redirected):
-                  """Extract source archive to every arch-specific build_dir."""
-                  ctx = getattr(recipe_self, "ctx", None)
-                  if ctx and hasattr(ctx, "archs") and ctx.archs:
-                      archs_to_unpack = ctx.archs
-                  else:
-                      archs_to_unpack = ["arm64-v8a", "armeabi-v7a"]
-                  for arch in archs_to_unpack:
-                      raw_bd = recipe_self.get_build_dir(arch)
-                      build_dir = os.path.abspath(raw_bd) if os.path.isabs(raw_bd) else os.path.join(_LAUNCH_DIR, raw_bd)
-                      # Skip if build_dir already has content (already unpacked for this arch)
-                      if os.path.isdir(build_dir) and os.listdir(build_dir):
-                          print(f"[ci-patch] skip unpack for {recipe_self.name}/{arch}: build_dir has content", flush=True)
-                          continue
-                      print(f"[ci-patch] unpack {recipe_self.name} -> {arch} at {build_dir}", flush=True)
-                      _unpack_to_build_dir(redirected, build_dir)
+                  raw = getattr(recipe_self.ctx, "packages_path", "packages")
+                  base = raw if os.path.isabs(raw) else os.path.join(_LAUNCH_DIR, raw)
+                  return os.path.join(base, recipe_self.name)
 
               _orig_dlin = Recipe.download_if_necessary
 
               def _patched_dlin(recipe_self, arch=None):
                   recipe_name = getattr(recipe_self, "name", "?")
-                  print(f"[ci-patch-dlin] ENTER recipe={recipe_name} arch={arch}", flush=True)
+                  print(f"[ci-patch-dlin] ENTER recipe={recipe_name}", flush=True)
                   if not getattr(recipe_self, "url", None):
-                      print(f"[ci-patch-dlin] no url attr -> original", flush=True)
+                      print(f"[ci-patch-dlin] no url, delegating to original", flush=True)
                       return _orig_dlin(recipe_self)
-                  filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
+
+                  # p4a expects the archive at: packages_path / recipe.name / basename(versioned_url)
+                  orig_filename = posixpath.basename(recipe_self.versioned_url.split("?")[0])
                   pkg_dir = _get_pkg_dir(recipe_self)
                   os.makedirs(pkg_dir, exist_ok=True)
-                  target_abs = os.path.abspath(os.path.join(pkg_dir, filename))
-                  # Check archive directly (no per-arch mark file, avoids double-call skip bug)
-                  def _archive_valid(path):
-                      """Return True only if the file exists, is >= 4096 bytes, and not an HTML error page."""
-                      try:
-                          return os.path.isfile(path) and os.path.getsize(path) >= 4096 and not looks_like_html(path)
-                      except Exception:
-                          return False
+                  target_abs = os.path.join(pkg_dir, orig_filename)
 
                   if _archive_valid(target_abs):
-                      print(f"[ci-patch-dlin] using cached archive: {target_abs} ({os.path.getsize(target_abs)}B)", flush=True)
-                  else:
-                      if os.path.exists(target_abs):
-                          print(f"[ci-patch-dlin] stale/invalid cached file removed: {target_abs}", flush=True)
-                          os.remove(target_abs)
-                      print(f"[ci-patch-dlin] downloading {recipe_self.versioned_url} -> {target_abs}", flush=True)
-                      last_err = None
-                      downloaded_ok = False
-                      for candidate in route_mirrors(recipe_self.versioned_url):
-                          candidate_ok = False
-                          for attempt in range(3):
-                              try:
-                                  if os.path.exists(target_abs):
-                                      os.remove(target_abs)
-                                  with requests.get(candidate, headers={"User-Agent": UA},
-                                                    timeout=(30, 180), allow_redirects=True, stream=True) as r:
-                                      r.raise_for_status()
-                                      with open(target_abs, "wb") as f:
-                                          for chunk in r.iter_content(chunk_size=65536):
-                                              if chunk:
-                                                  f.write(chunk)
-                                  if not _archive_valid(target_abs):
-                                      sz = os.path.getsize(target_abs) if os.path.exists(target_abs) else 0
-                                      raise RuntimeError(f"downloaded file invalid (size={sz}B, may be HTML or empty)")
-                                  sz = os.path.getsize(target_abs)
-                                  print(f"[ci-patch-dlin] OK {sz}B from {candidate}", flush=True)
-                                  os.sync()
-                                  candidate_ok = True
-                                  downloaded_ok = True
-                                  break
-                              except Exception as e:
-                                  last_err = e
-                                  print(f"[ci-patch-dlin] candidate {candidate} attempt {attempt+1}/3 failed: {e}", flush=True)
-                                  if attempt < 2:
-                                      time.sleep(2 ** attempt)
-                          if candidate_ok:
-                              break  # success, stop trying more candidates
-                          # else: try next candidate
-                      if not downloaded_ok:
-                          raise RuntimeError(f"All download candidates failed for {recipe_self.versioned_url}. Last error: {last_err}")
-                  # Always unpack for all archs (skip arch whose build_dir already has content)
-                  _do_unpack_all_archs(recipe_self, target_abs)
+                      print(f"[ci-patch-dlin] cached OK ({os.path.getsize(target_abs)}B): {target_abs}", flush=True)
+                      # p4a mark file so it knows we already downloaded
+                      mark = os.path.join(pkg_dir, f".mark-{orig_filename}")
+                      if not os.path.exists(mark):
+                          open(mark, "w").close()
+                      return  # let p4a do its own unpack via prepare_build_dir
+
+                  # Stale or missing — remove and re-download
+                  if os.path.exists(target_abs):
+                      print(f"[ci-patch-dlin] removing stale: {target_abs}", flush=True)
+                      os.remove(target_abs)
+
+                  print(f"[ci-patch-dlin] downloading {recipe_self.versioned_url}", flush=True)
+                  last_err = None
+                  downloaded_ok = False
+
+                  for candidate in route_mirrors(recipe_self.versioned_url):
+                      for attempt in range(3):
+                          try:
+                              if os.path.exists(target_abs):
+                                  os.remove(target_abs)
+                              with requests.get(candidate, headers={"User-Agent": UA},
+                                                timeout=(30, 180), allow_redirects=True,
+                                                stream=True) as r:
+                                  r.raise_for_status()
+                                  with open(target_abs, "wb") as f:
+                                      for chunk in r.iter_content(chunk_size=65536):
+                                          if chunk:
+                                              f.write(chunk)
+                              if not _archive_valid(target_abs):
+                                  sz = os.path.getsize(target_abs) if os.path.exists(target_abs) else 0
+                                  raise RuntimeError(f"file invalid after download (size={sz}B)")
+                              sz = os.path.getsize(target_abs)
+                              print(f"[ci-patch-dlin] OK {sz}B from {candidate}", flush=True)
+                              os.sync()
+                              downloaded_ok = True
+                              break
+                          except Exception as e:
+                              last_err = e
+                              print(f"[ci-patch-dlin] {candidate} attempt {attempt+1}/3 failed: {e}", flush=True)
+                              if attempt < 2:
+                                  time.sleep(2 ** attempt)
+                      if downloaded_ok:
+                          break
+
+                  if not downloaded_ok:
+                      raise RuntimeError(
+                          f"All mirrors failed for {recipe_self.versioned_url}. Last: {last_err}")
+
+                  # Write p4a mark file so it won't try to re-download
+                  mark = os.path.join(pkg_dir, f".mark-{orig_filename}")
+                  open(mark, "w").close()
+                  os.sync()
+                  # Do NOT do our own unpack here — let p4a's prepare_build_dir/unpack handle it
 
               Recipe.download_if_necessary = _patched_dlin
-              print("[ci-patch] patches installed successfully", flush=True)
+              print("[ci-patch] download patch installed", flush=True)
 
           install_patch()
           PYEOF
