@@ -257,6 +257,8 @@ class MainScreen(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._setup_ui()
+
+    def _setup_ui(self, *args):
         if USE_KIVYM:
             self._setup_kivymd()
         else:
