@@ -22,17 +22,50 @@ from kivy.core.text import LabelBase
 from kivy.core.window import Window
 from kivy.resources import resource_find
 
-# 注册中文字体（p4a 会把 fonts/ 目录打包进 APK）
+# 注册中文字体（p4a 会把字体打包进 app/ 目录）
 import os as _os
-FONT_PATH = resource_find('fonts/NotoSansSC-Regular.ttf')
-if not FONT_PATH:
-    # 桌面调试用相对路径
-    alt = _os.path.join(_os.path.dirname(__file__), 'fonts', 'NotoSansSC-Regular.ttf')
-    if _os.path.exists(alt):
-        FONT_PATH = alt
+import sys as _sys
+import logging as _logging
+_logging.basicConfig(level=_logging.INFO)
+_logger = _logging.getLogger('font')
+
+# 候选字体路径（按优先级）
+_font_candidates = [
+    'fonts/NotoSansSC-Regular.ttf',        # p4a app/ 子目录
+    'NotoSansSC-Regular.ttf',              # p4a app/ 根目录
+]
+# 桌面调试用相对路径
+if hasattr(__name__, '__file__') and __name__ != '__main__':
+    _base = _os.path.dirname(_os.path.abspath(__file__))
+else:
+    _base = '.'
+for _c in list(_font_candidates):
+    _font_candidates.append(_os.path.join(_base, _c))
+_font_candidates.append(_os.path.join(_base, 'fonts', 'NotoSansSC-Regular.ttf'))
+
+FONT_PATH = None
+for _p in _font_candidates:
+    _found = resource_find(_p)
+    if _found and _os.path.exists(_found):
+        FONT_PATH = _found
+        _logger.info(f'[FONT] Found: {_found}')
+        break
+    # 在 sys.path 里也找找
+    for _sp in _sys.path:
+        _tp = _os.path.join(_sp, _p)
+        if _os.path.exists(_tp):
+            FONT_PATH = _tp
+            _logger.info(f'[FONT] Found in sys.path: {_tp}')
+            break
+    if FONT_PATH:
+        break
+
 if FONT_PATH:
     LabelBase.register('NotoSansSC', FONT_PATH)
     LabelBase.default_font_name = 'NotoSansSC'
+    _logger.info(f'[FONT] Registered: {FONT_PATH}')
+else:
+    _logger.warning('[FONT] NotoSansSC not found, Chinese text may not render correctly')
 from kivy.clock import Clock
 from kivy.metrics import dp
 
