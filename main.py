@@ -119,74 +119,27 @@ def parse_url(text: str) -> dict:
 
 def _resolve_dns(host: str) -> str | None:
     """
-    用公共 DNS 服务器直接解析 hostname，解决 Android Python glibc DNS 解析失败的问题。
-    Android 的 net.dns1 为空，但 Python 进程的 DNS 栈找不到 nameserver。
+    通过 HTTPS DNS-over-HTTPS API 解析 hostname。
+    Android SELinux 阻止 raw UDP socket，改用 HTTPS（走 443 端口）做 DNS 查询。
     """
-    import struct, random
-    # 简单的 DNS 客户端实现，直接发 UDP 到公共 DNS
-    DNS_SERVER = '223.5.5.5'
-    DNS_PORT = 53
-    DNS_TIMEOUT = 3
-
+    import json as _json
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(DNS_TIMEOUT)
-        # DNS query ID (random)
-        qid = random.randint(0, 0xFFFF)
-        # Simple A record query
-        domain = host.encode('ascii')
-        # Build DNS query packet
-        query = struct.pack('>HHHHHH', qid, 0x0100, 1, 0, 0, 0)  # header
-        for part in domain.split(b'.'):
-            query += struct.pack('B', len(part)) + part
-        query += b'\x00'  # root label
-        query += struct.pack('>HH', 1, 1)  # QTYPE=A, QCLASS=IN
-        sock.sendto(query, (DNS_SERVER, DNS_PORT))
-        data, _ = sock.recvfrom(512)
-        sock.close()
-        # Parse DNS response
-        if len(data) < 12:
-            return None
-        # Skip header (12) + question section
-        qdcount = struct.unpack('>H', data[4:6])[0]
-        off = 12
-        for _ in range(qdcount):
-            # skip name
-            while off < len(data):
-                length = data[off]
-                if length & 0xC0 == 0xC0:
-                    off += 2
-                    break
-                elif length == 0:
-                    off += 1
-                    break
-                else:
-                    off += length + 1
-            off += 4  # QTYPE + QCLASS
-        # Answer section
-        if len(data) < off + 12:
-            return None
-        # Skip name (could be compressed)
-        while off < len(data):
-            length = data[off]
-            if length & 0xC0 == 0xC0:
-                off += 2
-                break
-            elif length == 0:
-                off += 1
-                break
-            else:
-                off += length + 1
-        rtype = struct.unpack('>H', data[off:off+2])[0]
-        off += 8  # TYPE + CLASS + TTL
-        rdlen = struct.unpack('>H', data[off:off+2])[0]
-        off += 2
-        if rtype == 1:  # A record
-            ip = '.'.join(str(b) for b in data[off:off+4])
-            _logger.info(f'[DNS] resolved {host} -> {ip}')
-            return ip
+        # Google DNS-over-HTTPS API
+        doh_url = f'https://dns.google/resolve?name={host}&type=A'
+        req = urllib.request.Request(doh_url, headers={
+            'User-Agent': 'python-requests/2.28.0',
+            'Accept': 'application/dns-json',
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode('utf-8'))
+            answers = data.get('Answer', [])
+            for ans in answers:
+                if ans.get('type') == 1:  # A record
+                    ip = ans['data']
+                    _logger.info(f'[DNS] DoH {host} -> {ip}')
+                    return ip
     except Exception as e:
-        _logger.warning(f'[DNS] resolve {host} failed: {e}')
+        _logger.warning(f'[DNS] DoH {host} failed: {e}')
     return None
 
 
