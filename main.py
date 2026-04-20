@@ -20,6 +20,19 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.checkbox import CheckBox
 from kivy.core.text import LabelBase
 from kivy.core.window import Window
+from kivy.resources import resource_find
+
+# 注册中文字体（p4a 会把 fonts/ 目录打包进 APK）
+import os as _os
+FONT_PATH = resource_find('fonts/NotoSansSC-Regular.ttf')
+if not FONT_PATH:
+    # 桌面调试用相对路径
+    alt = _os.path.join(_os.path.dirname(__file__), 'fonts', 'NotoSansSC-Regular.ttf')
+    if _os.path.exists(alt):
+        FONT_PATH = alt
+if FONT_PATH:
+    LabelBase.register('NotoSansSC', FONT_PATH)
+    LabelBase.default_font_name = 'NotoSansSC'
 from kivy.clock import Clock
 from kivy.metrics import dp
 

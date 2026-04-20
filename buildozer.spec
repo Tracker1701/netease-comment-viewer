@@ -7,7 +7,7 @@ package.domain = org.netease
 
 # 源码
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,png,jpg,kv,atlas,ttf,otf
 
 # 入口文件
 mainmodule = main
