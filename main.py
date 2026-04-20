@@ -2,9 +2,17 @@
 网易云音乐评论数查看器 - Android Kivy 版本
 基于官方 HTTP API，无需加密，支持专辑和歌手两种查询模式。
 """
+import os as _os
+# ── 修复 Android Python DNS 解析问题 ─────────────────────────────────────────
+# Android 上 Python 的 glibc 栈读不到 net.dns1（为空），导致 DNS 解析失败。
+# 设置 RESOLVER_NAMESERVERS 环境变量，让 uDNS（若编译进 glibc）使用公共 DNS。
+# 同时备用方案：直接用 IP + Host header（见 get_json 中的 fallback）。
+_os.environ.setdefault('RESOLVER_NAMESERVERS', '223.5.5.5 180.76.76.76 8.8.8.8')
+
 import re
 import json
 import threading
+import socket
 import urllib.request
 import urllib.error
 import time
@@ -109,6 +117,79 @@ def parse_url(text: str) -> dict:
     return None
 
 
+def _resolve_dns(host: str) -> str | None:
+    """
+    用公共 DNS 服务器直接解析 hostname，解决 Android Python glibc DNS 解析失败的问题。
+    Android 的 net.dns1 为空，但 Python 进程的 DNS 栈找不到 nameserver。
+    """
+    import struct, random
+    # 简单的 DNS 客户端实现，直接发 UDP 到公共 DNS
+    DNS_SERVER = '223.5.5.5'
+    DNS_PORT = 53
+    DNS_TIMEOUT = 3
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(DNS_TIMEOUT)
+        # DNS query ID (random)
+        qid = random.randint(0, 0xFFFF)
+        # Simple A record query
+        domain = host.encode('ascii')
+        # Build DNS query packet
+        query = struct.pack('>HHHHHH', qid, 0x0100, 1, 0, 0, 0)  # header
+        for part in domain.split(b'.'):
+            query += struct.pack('B', len(part)) + part
+        query += b'\x00'  # root label
+        query += struct.pack('>HH', 1, 1)  # QTYPE=A, QCLASS=IN
+        sock.sendto(query, (DNS_SERVER, DNS_PORT))
+        data, _ = sock.recvfrom(512)
+        sock.close()
+        # Parse DNS response
+        if len(data) < 12:
+            return None
+        # Skip header (12) + question section
+        qdcount = struct.unpack('>H', data[4:6])[0]
+        off = 12
+        for _ in range(qdcount):
+            # skip name
+            while off < len(data):
+                length = data[off]
+                if length & 0xC0 == 0xC0:
+                    off += 2
+                    break
+                elif length == 0:
+                    off += 1
+                    break
+                else:
+                    off += length + 1
+            off += 4  # QTYPE + QCLASS
+        # Answer section
+        if len(data) < off + 12:
+            return None
+        # Skip name (could be compressed)
+        while off < len(data):
+            length = data[off]
+            if length & 0xC0 == 0xC0:
+                off += 2
+                break
+            elif length == 0:
+                off += 1
+                break
+            else:
+                off += length + 1
+        rtype = struct.unpack('>H', data[off:off+2])[0]
+        off += 8  # TYPE + CLASS + TTL
+        rdlen = struct.unpack('>H', data[off:off+2])[0]
+        off += 2
+        if rtype == 1:  # A record
+            ip = '.'.join(str(b) for b in data[off:off+4])
+            _logger.info(f'[DNS] resolved {host} -> {ip}')
+            return ip
+    except Exception as e:
+        _logger.warning(f'[DNS] resolve {host} failed: {e}')
+    return None
+
+
 def get_json(url: str) -> dict:
     """带超时和错误处理的 GET 请求。"""
     req = urllib.request.Request(url, headers=HEADERS)
@@ -118,6 +199,26 @@ def get_json(url: str) -> dict:
             _logger.info(f'[API] GET {url[:60]} -> code={resp.status}')
             return result
     except Exception as e:
+        err_str = str(e)
+        # DNS 解析失败时，尝试用公共 DNS 直接解析 hostname，再直连 IP
+        if 'No address associated with hostname' in err_str or \
+           'Name or service not known' in err_str:
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                ip = _resolve_dns(parsed.hostname)
+                if ip:
+                    # 重新构造请求，使用直连 IP + 原始 Host header
+                    new_url = url.replace(parsed.hostname, ip)
+                    new_req = urllib.request.Request(new_url, headers=HEADERS)
+                    # Host header 必须保持原名，否则网易服务器不认识
+                    new_req.add_header('Host', parsed.hostname)
+                    with urllib.request.urlopen(new_req, timeout=20) as resp:
+                        result = json.loads(resp.read().decode('utf-8'))
+                        _logger.info(f'[API] GET (DNS-fallback) {url[:60]} -> code={resp.status}')
+                        return result
+            except Exception as e2:
+                _logger.warning(f'[API] DNS-fallback also FAILED: {e2}')
         _logger.warning(f'[API] GET {url[:60]} FAILED: {e}')
         return {}
 
