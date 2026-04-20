@@ -143,6 +143,35 @@ def _resolve_dns(host: str) -> str | None:
     return None
 
 
+def _ip_fallback(url: str, hostname: str) -> dict:
+    """
+    DNS 解析完全失败时的最后手段：硬编码已知 IP 直连。
+    Android SELinux/p4a Python 可能无法解析任何 hostname（net.dns1 为空）。
+    通过 HTTPS 直连 IP + 禁用证书验证 + Host header 重定向绕过。
+    """
+    import ssl as _ssl
+    # 已知 music.163.com CDN IP（来自 nslookup，CDN IP 相对稳定）
+    KNOWN_IPS = {
+        'music.163.com': ['106.38.195.163', '223.19.191.97'],
+    }
+    ips = KNOWN_IPS.get(hostname, [])
+    for ip in ips:
+        try:
+            new_url = url.replace(hostname, ip)
+            new_req = urllib.request.Request(new_url, headers=HEADERS)
+            new_req.add_header('Host', hostname)
+            # CDN IP 的 SSL 证书是签给域名的，直连 IP 会证书不匹配，禁用验证
+            ctx = _ssl._create_unverified_context()
+            with urllib.request.urlopen(new_req, timeout=15, context=ctx) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+                _logger.info(f'[API] GET (IP-fallback {ip}) {url[:60]} -> code={resp.status}')
+                return result
+        except Exception as e2:
+            _logger.warning(f'[API] IP-fallback {ip} FAILED: {e2}')
+            continue
+    return {}
+
+
 def get_json(url: str) -> dict:
     """带超时和错误处理的 GET 请求。"""
     req = urllib.request.Request(url, headers=HEADERS)
@@ -153,26 +182,16 @@ def get_json(url: str) -> dict:
             return result
     except Exception as e:
         err_str = str(e)
-        # DNS 解析失败时，尝试用公共 DNS 直接解析 hostname，再直连 IP
         if 'No address associated with hostname' in err_str or \
            'Name or service not known' in err_str:
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(url)
-                ip = _resolve_dns(parsed.hostname)
-                if ip:
-                    # 重新构造请求，使用直连 IP + 原始 Host header
-                    new_url = url.replace(parsed.hostname, ip)
-                    new_req = urllib.request.Request(new_url, headers=HEADERS)
-                    # Host header 必须保持原名，否则网易服务器不认识
-                    new_req.add_header('Host', parsed.hostname)
-                    with urllib.request.urlopen(new_req, timeout=20) as resp:
-                        result = json.loads(resp.read().decode('utf-8'))
-                        _logger.info(f'[API] GET (DNS-fallback) {url[:60]} -> code={resp.status}')
-                        return result
-            except Exception as e2:
-                _logger.warning(f'[API] DNS-fallback also FAILED: {e2}')
-        _logger.warning(f'[API] GET {url[:60]} FAILED: {e}')
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            result = _ip_fallback(url, parsed.hostname)
+            if result:
+                return result
+            _logger.warning(f'[API] All fallbacks failed for {url[:60]}')
+        else:
+            _logger.warning(f'[API] GET {url[:60]} FAILED: {e}')
         return {}
 
 
