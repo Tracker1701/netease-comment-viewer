@@ -250,7 +250,7 @@ class AlbumSection(BoxLayout):
             spacing=dp(6),
         )
         icon_lbl = Label(
-            text='[📀]',
+            text='[专辑]',
             font_size='14sp',
             color=(1, 0.8, 0.2, 1),
             size_hint_x=0.1,
@@ -323,7 +323,7 @@ class MainScreen(BoxLayout):
 
         # 标题
         self.add_widget(MDLabel(
-            text='🎵 网易云评论数查看器',
+            text='网易云评论数查看器',
             font_style='H5',
             bold=True,
             size_hint_y=None,
@@ -347,11 +347,11 @@ class MainScreen(BoxLayout):
             spacing=dp(10),
         )
         self.query_btn = MDRaisedButton(
-            text='🔍 查询',
+            text='查询',
             on_press=lambda _: self.start_query(),
         )
         self.export_btn = MDRaisedButton(
-            text='📥 导出 CSV',
+            text='导出 CSV',
             on_press=lambda _: self.export_csv(),
             disabled=True,
         )
@@ -401,7 +401,7 @@ class MainScreen(BoxLayout):
         self.spacing = 10
 
         self.add_widget(Label(
-            text='🎵 网易云评论数查看器',
+            text='网易云评论数查看器',
             font_size=20,
             size_hint_y=None,
             height=48,
@@ -424,12 +424,12 @@ class MainScreen(BoxLayout):
             spacing=10,
         )
         self.query_btn = Button(
-            text='🔍 查询',
+            text='查询',
             background_color=(0.2, 0.4, 0.8, 1),
             on_press=lambda _: self.start_query(),
         )
         self.export_btn = Button(
-            text='📥 导出 CSV',
+            text='导出 CSV',
             background_color=(0.2, 0.7, 0.3, 1),
             on_press=lambda _: self.export_csv(),
             disabled=True,
@@ -496,7 +496,7 @@ class MainScreen(BoxLayout):
                 results = self._fetch_artist(qid)
             Clock.schedule_once(lambda _: self._show_results(results))
         except Exception as e:
-            Clock.schedule_once(lambda _: self._set_status(f'❌ 错误: {e}'))
+            Clock.schedule_once(lambda _: self._set_status(f'[X] 错误: {e}'))
 
     def _fetch_album(self, album_id: int) -> list:
         """专辑模式：专辑信息 + 所有歌曲评论数"""
@@ -617,7 +617,7 @@ class MainScreen(BoxLayout):
         # 汇总行
         self.results_container.add_widget(ResultRow(
             index='#',
-            name=f'📀 {album_name}',
+            name=f'【{album_name}】',
             comment=album_comment,
         ))
 
@@ -634,10 +634,10 @@ class MainScreen(BoxLayout):
 
         # 汇总
         self.results_container.add_widget(self._make_footer(
-            f'💬 歌曲评论总计: {format_num(total_song_comment)}  |  '
-            f'📀 专辑评论: {format_num(album_comment)}'
+            f'歌曲评论总计: {format_num(total_song_comment)}  |  '
+            f'专辑评论: {format_num(album_comment)}'
         ))
-        self._set_progress(100, '✅ 查询完成')
+        self._set_progress(100, '[OK] 查询完成')
         self.query_btn.disabled = False
 
     def _show_artist_results(self, meta: dict):
@@ -649,8 +649,8 @@ class MainScreen(BoxLayout):
         total_song_comment = sum(r['song_comment'] for r in results)
         self.results_container.add_widget(self._make_header())
         self.results_container.add_widget(self._make_footer(
-            f'🏷️ 共 {len(albums)} 张专辑  |  '
-            f'💬 歌曲评论总计: {format_num(total_song_comment)}'
+            f'共 {len(albums)} 张专辑  |  '
+            f'歌曲评论总计: {format_num(total_song_comment)}'
         ))
 
         # 按专辑分组展示
@@ -677,7 +677,7 @@ class MainScreen(BoxLayout):
             )
             self.results_container.add_widget(section)
 
-        self._set_progress(100, '✅ 查询完成')
+        self._set_progress(100, '[OK] 查询完成')
         self.query_btn.disabled = False
 
     def _make_header(self) -> Label:
@@ -758,9 +758,9 @@ class MainScreen(BoxLayout):
                     for r in self.all_results:
                         f.write(f'"{r["song"]}",{r["song_comment"]}\n')
 
-            self._set_status(f'📥 已导出: {filename}')
+            self._set_status(f'已导出: {filename}')
         except Exception as e:
-            self._set_status(f'❌ 导出失败: {e}')
+            self._set_status(f'[X] 导出失败: {e}')
 
 
 # ─────────────────────────────────────────────
