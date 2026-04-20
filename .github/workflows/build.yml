@@ -179,56 +179,6 @@ jobs:
               Recipe = p4a_r.Recipe
               print(f"[ci-patch] installing download patch...", flush=True)
 
-              # ─── Gradle OkHttp injection ───────────────────────────────────
-              # Monkey-patch SDL2GradleBootstrap.assemble_distribution to inject
-              # OkHttp Maven deps into build.gradle BEFORE gradlew is invoked.
-              try:
-                  import sys as _sys, os as _os
-                  _sys.path.insert(0, _os.path.join(_LAUNCH_DIR, '.github', 'ci_patch'))
-
-                  def _patch_gradle_inject():
-                      """Find and patch build.gradle in p4a dist dirs."""
-                      dist_base = _os.path.join(_LAUNCH_DIR, '.buildozer', 'android', 'platform', 'build', 'dists')
-                      if not _os.path.isdir(dist_base):
-                          return
-                      for sub in _os.listdir(dist_base):
-                          gf = _os.path.join(dist_base, sub, 'build.gradle')
-                          if not _os.path.isfile(gf):
-                              continue
-                          with open(gf, 'r', encoding='utf-8') as f:
-                              c = f.read()
-                          changed = False
-                          if "mavenCentral()" not in c:
-                              c = c.replace("repositories {", "repositories {\n        mavenCentral()", 1)
-                              changed = True
-                          okhttp = "implementation 'com.squareup.okhttp3:okhttp:4.12.0'"
-                          okio = "implementation 'com.squareup.okio:okio:3.9.0'"
-                          if okhttp not in c:
-                              c = c.replace("dependencies {", "dependencies {\n    " + okhttp + "\n    " + okio, 1)
-                              changed = True
-                          if changed:
-                              with open(gf, 'w', encoding='utf-8') as f:
-                                  f.write(c)
-                              print(f"[ci-patch] gradle injected OkHttp: {gf}", flush=True)
-
-                  def _patched_assemble_distribution(orig_fn, self):
-                      """Wrapper: run original, then patch build.gradle if gradle dirs exist."""
-                      result = orig_fn(self)
-                      _patch_gradle_inject()
-                      return result
-
-                  # Patch SDL2GradleBootstrap.assemble_distribution
-                  import pythonforandroid.bootstraps as _bs
-                  for _name in ('sdl2',):
-                      _cls = getattr(_bs, _name.title() + 'Bootstrap', None)
-                      if _cls and hasattr(_cls, 'assemble_distribution'):
-                          _orig = _cls.assemble_distribution
-                          _cls.assemble_distribution = lambda s: _patched_assemble_distribution(_orig, s)
-                          print(f"[ci-patch] gradle inject patched onto {_name}.assemble_distribution", flush=True)
-                          break
-              except Exception as _e:
-                  print(f"[ci-patch] gradle inject skipped: {_e}", flush=True)
-
               UA = (
                   "Mozilla/5.0 (X11; Linux x86_64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -440,7 +390,7 @@ jobs:
           # IMPORTANT: import ci_patch BEFORE running p4a toolchain so the patch
           # is installed before p4a's Recipe class is ever referenced.
           # Note: kivymd (not KivyMD) so p4a recipe class name lookup matches
-          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,kivymd==1.1.1,pillow,urllib3','--arch','arm64-v8a','--package','org.netease.netease_comment_viewer','--name','netease_comment_viewer','--version','0.1.0','--private','.','--permission','INTERNET,ACCESS_NETWORK_STATE']; main()" 2>&1 | tee buildozer-ci.log
+          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,kivymd==1.1.1,pillow,urllib3','--arch','arm64-v8a','--package','org.netease.netease_comment_viewer','--name','netease_comment_viewer','--version','0.1.0','--private','.','--permission','INTERNET,ACCESS_NETWORK_STATE','--depend','com.squareup.okhttp3:okhttp:4.12.0']; main()" 2>&1 | tee buildozer-ci.log
 
           echo "=== post-build png dir state (armeabi-v7a) ==="
           find ~/.local/share/python-for-android/build/other_builds/png/ -type f -name "configure" 2>/dev/null || echo "no configure found"
