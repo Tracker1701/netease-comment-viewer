@@ -417,10 +417,9 @@ jobs:
           # p4a creates the Android project at .buildozer/android/platform/build/dists/<dist_name>/
           GRADLE_FILE=$(find .buildozer -name build.gradle -path "*/dists/*" | head -1)
           if [[ -z "$GRADLE_FILE" ]]; then
-            echo "WARNING: build.gradle not found — build may have failed or APK already existed. Skipping injection."
+            echo "ERROR: build.gradle not found in .buildozer/*/dists/*"
             find .buildozer -name "*.gradle" 2>/dev/null | head -10 || echo "(no .gradle files found)"
-            echo "exit_gracefully=yes" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
           echo "=== Found build.gradle: $GRADLE_FILE"
 
