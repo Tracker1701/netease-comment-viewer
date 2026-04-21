@@ -158,63 +158,36 @@ def _java_get(url: str) -> dict:
     return _java_url(url)
 
 
-def _init_pyjnius_classloader():
-    """
-    修复 pyjnius 在 p4a APK 环境下找不到 APK 内编译的 OkHttp 类的问题。
-    p4a --depend 注入的 OkHttp 会被编译进 APK DEX，但 pyjnius 默认的 ClassLoader
-    只包含 BOOT CLASSPATH，没有 APK 的 DexPathList。
-    这里把当前线程的 context ClassLoader（= app 的 PathClassLoader）注入给 pyjnius，
-    确保 autoclass 能找到 APK 内编译的 okhttp3 类。
-    """
-    try:
-        from jnius import autoclass
-        Thread = autoclass('java.lang.Thread')
-        # 拿到 app 的 ClassLoader（PathClassLoader，包含 APK 的所有 DEX）
-        PythonActivity = autoclass('org.kivy.android.PythonActivity')
-        app_classloader = PythonActivity.getApplicationContext().getClassLoader()
-        # 设为当前线程 context ClassLoader，pyjnius 的 autoclass 链会用到它
-        Thread.currentThread().setContextClassLoader(app_classloader)
-    except Exception as e:
-        pass  # 桌面环境没有这些类，正常忽略
-
-
-# 全局标记，避免重复初始化
-_pyjnius_classloader_inited = False
-
-
 def _java_okhttp(url: str) -> dict:
-    """通过 OkHttp 发送请求（华为 aserviceproxy_s 兼容）"""
-    global _pyjnius_classloader_inited
-    if not _pyjnius_classloader_inited:
-        _init_pyjnius_classloader()
-        _pyjnius_classloader_inited = True
+    """
+    通过 CloudHttpHelper（打包进 APK DEX 的 Java 辅助类）发送 HTTP 请求。
 
+    根因：p4a --depend 注入的 OkHttp 编译进了 APK DEX，但 pyjnius 的 autoclass
+    默认 ClassLoader 不含 APK DexPathList，导致 ClassNotFoundException。
+
+    解决方案：写一个 Java 辅助类 CloudHttpHelper.java 一起编译进 APK DEX。
+    Java 代码天然在 app ClassLoader 上下文运行，可直接加载 okhttp3 类。
+    Python 通过 pyjnius 调用 CloudHttpHelper.get()，不再需要直接 autoclass OkHttp。
+    """
     try:
         from jnius import autoclass
 
-        # OkHttp3 API
-        OkHttpClient = autoclass('okhttp3.OkHttpClient')
-        Request = autoclass('okhttp3.Request')
-        Request.Builder = autoclass('okhttp3.Request.Builder')
+        # CloudHttpHelper 是 Java 类，编译在 APK DEX 里，
+        # pyjnius 能找到它（是 app DEX 中的类），而它内部能加载 OkHttp
+        CloudHttpHelper = autoclass('org.kivy.android.CloudHttpHelper')
 
-        client = OkHttpClient()
-        builder = Request.Builder()
-        for k, v in HEADERS.items():
-            builder.addHeader(k, v)
-        builder.url(url)
-        builder.get()
-        request = builder.build()
+        # CloudHttpHelper.get() 返回响应体字符串，错误时返回 "ERROR:..." 前缀
+        response_body = CloudHttpHelper.get(url)
 
-        resp = client.newCall(request).execute()
-        code = resp.code()
-        body_bytes = resp.body().bytes()
-        resp.close()
+        if response_body.startswith('ERROR:'):
+            _logger.warning(f'[API-CloudHttpHelper] {response_body}')
+            return {}
 
-        result = json.loads(body_bytes.decode('utf-8'))
-        _logger.info(f'[API-OkHttp] GET {url[:60]} -> code={code}')
+        result = json.loads(response_body)
+        _logger.info(f'[API-CloudHttpHelper] GET {url[:60]} -> OK')
         return result
     except Exception as e:
-        _logger.warning(f'[API-OkHttp] failed: {type(e).__name__}: {e}')
+        _logger.warning(f'[API-CloudHttpHelper] failed: {type(e).__name__}: {e}')
         return {}
 
 
