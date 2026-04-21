@@ -1,5 +1,7 @@
 # 🎵 网易云评论数查看器（Android）
 
+<!-- CI trigger -->
+
 基于 Kivy/KivyMD 的 Android 应用，无需 Python 环境，直接安装 APK 使用。
 
 ## 功能
