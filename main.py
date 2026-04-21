@@ -158,8 +158,37 @@ def _java_get(url: str) -> dict:
     return _java_url(url)
 
 
+def _init_pyjnius_classloader():
+    """
+    修复 pyjnius 在 p4a APK 环境下找不到 APK 内编译的 OkHttp 类的问题。
+    p4a --depend 注入的 OkHttp 会被编译进 APK DEX，但 pyjnius 默认的 ClassLoader
+    只包含 BOOT CLASSPATH，没有 APK 的 DexPathList。
+    这里把当前线程的 context ClassLoader（= app 的 PathClassLoader）注入给 pyjnius，
+    确保 autoclass 能找到 APK 内编译的 okhttp3 类。
+    """
+    try:
+        from jnius import autoclass
+        Thread = autoclass('java.lang.Thread')
+        # 拿到 app 的 ClassLoader（PathClassLoader，包含 APK 的所有 DEX）
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        app_classloader = PythonActivity.getApplicationContext().getClassLoader()
+        # 设为当前线程 context ClassLoader，pyjnius 的 autoclass 链会用到它
+        Thread.currentThread().setContextClassLoader(app_classloader)
+    except Exception as e:
+        pass  # 桌面环境没有这些类，正常忽略
+
+
+# 全局标记，避免重复初始化
+_pyjnius_classloader_inited = False
+
+
 def _java_okhttp(url: str) -> dict:
     """通过 OkHttp 发送请求（华为 aserviceproxy_s 兼容）"""
+    global _pyjnius_classloader_inited
+    if not _pyjnius_classloader_inited:
+        _init_pyjnius_classloader()
+        _pyjnius_classloader_inited = True
+
     try:
         from jnius import autoclass
 
