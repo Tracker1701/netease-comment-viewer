@@ -425,41 +425,40 @@ jobs:
           if grep -q "CLOUDHTTP_SRC_DIR" "$GRADLE_FILE"; then
             echo "Already patched, skipping."
           else
-            # Write injection script to temp file, then run it
-            cat > /tmp/inject_gradle.py << 'PYEOF'
-import os, sys
-gradle_file = sys.argv[1]
-java_src_dir = sys.argv[2]
-with open(gradle_file, 'r', encoding='utf-8') as f:
-    content = f.read()
-android_start = content.rfind('android {')
-if android_start == -1:
-    print(f"ERROR: 'android {{' not found")
-    sys.exit(1)
-depth = 0; i = android_start
-while i < len(content):
-    c = content[i]
-    if c == '{': depth += 1
-    elif c == '}':
-        depth -= 1
-        if depth == 0:
-            inject = (
-                '\n'
-                '        // CI patch: compile CloudHttpHelper.java\n'
-                '        main {\n'
-                '            java.srcDirs += ["' + java_src_dir + '"]\n'
-                '        }\n'
-            )
-            new_content = content[:i] + inject + content[i:]
-            with open(gradle_file, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-            print(f"[inject] SUCCESS: java.srcDirs added, dir={java_src_dir}")
-            break
-    i += 1
-else:
-    print("ERROR: no matching close brace for android {")
-    sys.exit(1)
-PYEOF
+            # Write Python injection script via printf (no heredoc, avoids YAML quoting issues)
+            printf '%s\n' \
+              "import os, sys" \
+              "gradle_file = sys.argv[1]" \
+              "java_src_dir = sys.argv[2]" \
+              "with open(gradle_file, 'r', encoding='utf-8') as f:" \
+              "    content = f.read()" \
+              "android_start = content.rfind('android {')" \
+              "if android_start == -1:" \
+              "    print('ERROR: android { not found')" \
+              "    sys.exit(1)" \
+              "depth = 0; i = android_start" \
+              "while i < len(content):" \
+              "    c = content[i]" \
+              "    if c == '{': depth += 1" \
+              "    elif c == '}':" \
+              "        depth -= 1" \
+              "        if depth == 0:" \
+              "            inject = (" \
+              "                chr(10) + '        // CI patch: compile CloudHttpHelper.java' + chr(10)" \
+              "                + '        main {' + chr(10)" \
+              "                + '            java.srcDirs += [\"' + java_src_dir + '\"]' + chr(10)" \
+              "                + '        }' + chr(10)" \
+              "            )" \
+              "            new_content = content[:i] + inject + content[i:]" \
+              "            with open(gradle_file, 'w', encoding='utf-8') as f:" \
+              "                f.write(new_content)" \
+              "            print('[inject] SUCCESS: java.srcDirs added, dir=' + java_src_dir)" \
+              "            break" \
+              "    i += 1" \
+              "else:" \
+              "    print('ERROR: no matching close brace for android {')" \
+              "    sys.exit(1)" \
+              > /tmp/inject_gradle.py
             python3 /tmp/inject_gradle.py "$GRADLE_FILE" "$JAVA_SRC_DIR"
           fi
 
