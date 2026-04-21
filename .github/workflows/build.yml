@@ -166,7 +166,7 @@ jobs:
           set -euxo pipefail
           mkdir -p .github/ci_patch
           cat > .github/ci_patch/ci_patch.py << 'PYEOF'
-          import os, sys, time, posixpath, shutil, re
+          import os, sys, time, posixpath, shutil
 
           # Fixed at script injection time — the cwd when p4a/buildozer is launched.
           _LAUNCH_DIR = os.path.abspath(os.getcwd())
@@ -332,55 +332,6 @@ jobs:
               Recipe.download_if_necessary = _patched_dlin
               print("[ci-patch] download patch installed", flush=True)
 
-              # ── Patch 2: inject CloudHttpHelper.java into gradle build ──────────
-              print("[ci-patch] installing Java compilation patch...", flush=True)
-
-              try:
-                  from pythonforandroid.bootstrap import _Sdl2Bootstrap
-              except Exception:
-                  from pythonforandroid.bootstrap import SDL2Bootstrap as _Sdl2Bootstrap
-
-              _orig_assemble = _Sdl2Bootstrap.assemble_distribution
-
-              def _patched_assemble(self, dist_dir):
-                  # Call original to produce build files first
-                  ret = _orig_assemble(self, dist_dir)
-                  # Now inject custom Java source directory into build.gradle
-                  build_gradle = os.path.join(dist_dir, "build.gradle")
-                  if os.path.exists(build_gradle):
-                      with open(build_gradle, "r", encoding="utf-8") as f:
-                          content = f.read()
-                      if "CLOUDHTTP_SRC_DIR" not in content:
-                          java_src_dir = os.path.join(_LAUNCH_DIR, "java")
-                          inject = (
-                              '\n'
-                              '// CI patch: compile custom Java helper classes\n'
-                              'android {\n'
-                              '    sourceSets {\n'
-                              '        main {\n'
-                              '            java.srcDirs += ["' + java_src_dir + '"]\n'
-                              '        }\n'
-                              '    }\n'
-                              '}\n'
-                          )
-                          # inject before the final closing brace / android block
-                          # Simple approach: append before last closing brace of android block
-                          # Find the last occurrence of "android {" ... "}" pattern
-                          # Insert just before the final "}" of the file
-                          content_new = content.rstrip() + inject + '\n'
-                          with open(build_gradle, "w", encoding="utf-8") as f:
-                              f.write(content_new)
-                          print(f"[ci-patch] injected Java srcDir into {build_gradle}", flush=True)
-                      else:
-                          print("[ci-patch] Java srcDir already injected", flush=True)
-                  else:
-                      print(f"[ci-patch] WARNING: {build_gradle} not found", flush=True)
-                  return ret
-
-              _Sdl2Bootstrap.assemble_distribution = _patched_assemble
-              print("[ci-patch] Java compilation patch installed", flush=True)
-              # ── End Patch 2 ────────────────────────────────────────────────────
-
           install_patch()
           PYEOF
           echo "ci_patch.py created"
@@ -449,6 +400,90 @@ jobs:
           # p4a toolchain.py puts APKs in .buildozer/android/platform/build/dists/{app_name}/bin/
           find .buildozer -type f \( -name "*.apk" -o -name "*.aab" \) 2>/dev/null | sort || true
           ls -lah .buildozer/android/platform/build/dists/ 2>/dev/null || true
+
+      - name: Inject Java source into build.gradle (CloudHttpHelper)
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          # Find build.gradle in the p4a dist directory
+          WORKSPACE="$GITHUB_WORKSPACE"
+          JAVA_SRC_DIR="$WORKSPACE/java"
+
+          echo "=== GITHUB_WORKSPACE: $WORKSPACE"
+          echo "=== JAVA_SRC_DIR: $JAVA_SRC_DIR"
+          echo "=== Contents of java/:"
+          find "$JAVA_SRC_DIR" -type f 2>/dev/null || echo "java/ not found at $JAVA_SRC_DIR"
+
+          # p4a creates the Android project at .buildozer/android/platform/build/dists/<dist_name>/
+          # build.gradle is at the root of that dist directory
+          GRADLE_FILE=$(find .buildozer -name build.gradle -path "*/dists/*" | head -1)
+          if [[ -z "$GRADLE_FILE" ]]; then
+            echo "ERROR: build.gradle not found in .buildozer/*/dists/*"
+            find .buildozer -name "*.gradle" 2>/dev/null | head -10
+            exit 1
+          fi
+
+          echo "=== Found build.gradle: $GRADLE_FILE"
+
+          # Check if already patched
+          if grep -q "CLOUDHTTP_SRC_DIR" "$GRADLE_FILE"; then
+            echo "Already patched, skipping."
+          else
+            # Inject android.sourceSets block before the last closing brace of android {}
+            # We'll use Python for reliable text manipulation
+            python3 - <<'PYEOF'
+import os, sys
+
+gradle_file = sys.argv[1]
+java_src_dir = sys.argv[2]
+
+with open(gradle_file, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+# Find the last occurrence of '}' that closes the android {} block
+# Strategy: find the position of the LAST standalone '}' at the file level
+# (not inside strings or nested blocks). 
+# Simple approach: find 'android {' and count braces to find the matching '}'.
+android_start = content.rfind('android {')
+if android_start == -1:
+    print(f"ERROR: 'android {{' not found in {gradle_file}")
+    sys.exit(1)
+
+# Find the matching closing brace by counting brace levels
+depth = 0
+i = android_start
+while i < len(content):
+    c = content[i]
+    if c == '{':
+        depth += 1
+    elif c == '}':
+        depth -= 1
+        if depth == 0:
+            # This is the matching close brace for 'android {'
+            inject = (
+                '\n'
+                '        // CI patch: compile CloudHttpHelper.java\n'
+                '        main {\n'
+                '            java.srcDirs += ["' + java_src_dir + '"]\n'
+                '        }\n'
+            )
+            # Insert just before this closing '}' (the android block close)
+            new_content = content[:i] + inject + content[i:]
+            with open(gradle_file, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            print(f"[inject] SUCCESS: added java.srcDirs to {gradle_file}")
+            print(f"[inject] Injected dir: {java_src_dir}")
+            break
+    i += 1
+else:
+    print(f"ERROR: could not find matching close brace for android {{ at position {android_start}")
+    sys.exit(1)
+PYEOF
+          fi
+
+          echo "=== build.gradle after injection (last 20 lines) ==="
+          tail -20 "$GRADLE_FILE"
 
       - name: Collect APKs
         id: collect
