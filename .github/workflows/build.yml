@@ -406,61 +406,43 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # Find build.gradle in the p4a dist directory
           WORKSPACE="$GITHUB_WORKSPACE"
           JAVA_SRC_DIR="$WORKSPACE/java"
 
           echo "=== GITHUB_WORKSPACE: $WORKSPACE"
           echo "=== JAVA_SRC_DIR: $JAVA_SRC_DIR"
-          echo "=== Contents of java/:"
-          find "$JAVA_SRC_DIR" -type f 2>/dev/null || echo "java/ not found at $JAVA_SRC_DIR"
+          find "$JAVA_SRC_DIR" -type f 2>/dev/null || echo "java/ not found"
 
           # p4a creates the Android project at .buildozer/android/platform/build/dists/<dist_name>/
-          # build.gradle is at the root of that dist directory
           GRADLE_FILE=$(find .buildozer -name build.gradle -path "*/dists/*" | head -1)
           if [[ -z "$GRADLE_FILE" ]]; then
             echo "ERROR: build.gradle not found in .buildozer/*/dists/*"
             find .buildozer -name "*.gradle" 2>/dev/null | head -10
             exit 1
           fi
-
           echo "=== Found build.gradle: $GRADLE_FILE"
 
-          # Check if already patched
           if grep -q "CLOUDHTTP_SRC_DIR" "$GRADLE_FILE"; then
             echo "Already patched, skipping."
           else
-            # Inject android.sourceSets block before the last closing brace of android {}
-            # We'll use Python for reliable text manipulation
-            python3 - <<'PYEOF'
+            # Write injection script to temp file, then run it
+            cat > /tmp/inject_gradle.py << 'PYEOF'
 import os, sys
-
 gradle_file = sys.argv[1]
 java_src_dir = sys.argv[2]
-
 with open(gradle_file, 'r', encoding='utf-8') as f:
     content = f.read()
-
-# Find the last occurrence of '}' that closes the android {} block
-# Strategy: find the position of the LAST standalone '}' at the file level
-# (not inside strings or nested blocks). 
-# Simple approach: find 'android {' and count braces to find the matching '}'.
 android_start = content.rfind('android {')
 if android_start == -1:
-    print(f"ERROR: 'android {{' not found in {gradle_file}")
+    print(f"ERROR: 'android {{' not found")
     sys.exit(1)
-
-# Find the matching closing brace by counting brace levels
-depth = 0
-i = android_start
+depth = 0; i = android_start
 while i < len(content):
     c = content[i]
-    if c == '{':
-        depth += 1
+    if c == '{': depth += 1
     elif c == '}':
         depth -= 1
         if depth == 0:
-            # This is the matching close brace for 'android {'
             inject = (
                 '\n'
                 '        // CI patch: compile CloudHttpHelper.java\n'
@@ -468,22 +450,21 @@ while i < len(content):
                 '            java.srcDirs += ["' + java_src_dir + '"]\n'
                 '        }\n'
             )
-            # Insert just before this closing '}' (the android block close)
             new_content = content[:i] + inject + content[i:]
             with open(gradle_file, 'w', encoding='utf-8') as f:
                 f.write(new_content)
-            print(f"[inject] SUCCESS: added java.srcDirs to {gradle_file}")
-            print(f"[inject] Injected dir: {java_src_dir}")
+            print(f"[inject] SUCCESS: java.srcDirs added, dir={java_src_dir}")
             break
     i += 1
 else:
-    print(f"ERROR: could not find matching close brace for android {{ at position {android_start}")
+    print("ERROR: no matching close brace for android {")
     sys.exit(1)
 PYEOF
+            python3 /tmp/inject_gradle.py "$GRADLE_FILE" "$JAVA_SRC_DIR"
           fi
 
-          echo "=== build.gradle after injection (last 20 lines) ==="
-          tail -20 "$GRADLE_FILE"
+          echo "=== build.gradle tail after injection ==="
+          tail -15 "$GRADLE_FILE"
 
       - name: Collect APKs
         id: collect
