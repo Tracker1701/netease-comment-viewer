@@ -337,6 +337,7 @@ jobs:
           echo "ci_patch.py created"
 
       - name: Build debug APK
+        id: build
         shell: bash
         run: |
           set -euxo pipefail
