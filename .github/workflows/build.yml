@@ -391,7 +391,7 @@ jobs:
           # IMPORTANT: import ci_patch BEFORE running p4a toolchain so the patch
           # is installed before p4a's Recipe class is ever referenced.
           # Note: kivymd (not KivyMD) so p4a recipe class name lookup matches
-          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,kivymd==1.1.1,pillow,urllib3','--arch','arm64-v8a','--package','org.netease.netease_comment_viewer','--name','netease_comment_viewer','--version','0.1.0','--private','.','--permission','INTERNET,ACCESS_NETWORK_STATE','--depend','com.squareup.okhttp3:okhttp:4.12.0']; main()" 2>&1 | tee buildozer-ci.log
+          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0','--arch','arm64-v8a','--package','org.netease.netease_comment_viewer','--name','netease_comment_viewer','--version','0.1.0','--private','.','--permission','INTERNET,ACCESS_NETWORK_STATE']; main()" 2>&1 | tee buildozer-ci.log
           BUILD_EXIT=${PIPESTATUS[0]}
           echo "p4a build exit code: $BUILD_EXIT"
           echo "build_exit=$BUILD_EXIT" >> "$GITHUB_OUTPUT"
@@ -409,71 +409,6 @@ jobs:
           # p4a toolchain.py puts APKs in .buildozer/android/platform/build/dists/{app_name}/bin/
           find .buildozer -type f \( -name "*.apk" -o -name "*.aab" \) 2>/dev/null | sort || true
           ls -lah .buildozer/android/platform/build/dists/ 2>/dev/null || true
-
-      - name: Inject Java source into build.gradle (CloudHttpHelper)
-        if: steps.build.outputs.build_exit == '0'
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          WORKSPACE="$GITHUB_WORKSPACE"
-          JAVA_SRC_DIR="$WORKSPACE/java"
-
-          echo "=== GITHUB_WORKSPACE: $WORKSPACE"
-          echo "=== JAVA_SRC_DIR: $JAVA_SRC_DIR"
-          find "$JAVA_SRC_DIR" -type f 2>/dev/null || echo "java/ not found"
-
-          # p4a creates the Android project at .buildozer/android/platform/build/dists/<dist_name>/
-          GRADLE_FILE=$(find .buildozer -name build.gradle -path "*/dists/*" | head -1)
-          if [[ -z "$GRADLE_FILE" ]]; then
-            echo "ERROR: build.gradle not found in .buildozer/*/dists/*"
-            find .buildozer -name "*.gradle" 2>/dev/null | head -10 || echo "(no .gradle files found)"
-            exit 1
-          fi
-          echo "=== Found build.gradle: $GRADLE_FILE"
-
-          if grep -q "CLOUDHTTP_SRC_DIR" "$GRADLE_FILE"; then
-            echo "Already patched, skipping."
-          else
-            # Write Python injection script via printf (no heredoc, avoids YAML quoting issues)
-            printf '%s\n' \
-              "import os, sys" \
-              "gradle_file = sys.argv[1]" \
-              "java_src_dir = sys.argv[2]" \
-              "with open(gradle_file, 'r', encoding='utf-8') as f:" \
-              "    content = f.read()" \
-              "android_start = content.rfind('android {')" \
-              "if android_start == -1:" \
-              "    print('ERROR: android { not found')" \
-              "    sys.exit(1)" \
-              "depth = 0; i = android_start" \
-              "while i < len(content):" \
-              "    c = content[i]" \
-              "    if c == '{': depth += 1" \
-              "    elif c == '}':" \
-              "        depth -= 1" \
-              "        if depth == 0:" \
-              "            inject = (" \
-              "                chr(10) + '        // CI patch: compile CloudHttpHelper.java' + chr(10)" \
-              "                + '        main {' + chr(10)" \
-              "                + '            java.srcDirs += [\"' + java_src_dir + '\"]' + chr(10)" \
-              "                + '        }' + chr(10)" \
-              "            )" \
-              "            new_content = content[:i] + inject + content[i:]" \
-              "            with open(gradle_file, 'w', encoding='utf-8') as f:" \
-              "                f.write(new_content)" \
-              "            print('[inject] SUCCESS: java.srcDirs added, dir=' + java_src_dir)" \
-              "            break" \
-              "    i += 1" \
-              "else:" \
-              "    print('ERROR: no matching close brace for android {')" \
-              "    sys.exit(1)" \
-              > /tmp/inject_gradle.py
-            python3 /tmp/inject_gradle.py "$GRADLE_FILE" "$JAVA_SRC_DIR"
-          fi
-
-          echo "=== build.gradle tail after injection ==="
-          tail -15 "$GRADLE_FILE"
 
       - name: Collect APKs
         id: collect
