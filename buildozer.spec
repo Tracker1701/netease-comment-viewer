@@ -7,7 +7,7 @@ package.domain = org.netease
 
 # 源码
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,ttf,otf,java
+source.include_exts = py,png,jpg,kv,atlas,ttf,otf,java,xml
 
 # 入口文件
 mainmodule = main
@@ -24,6 +24,9 @@ android.api = 34
 
 # 权限（网络）
 android.permissions = INTERNET,ACCESS_NETWORK_STATE
+
+# 网络安全配置（允许明文流量 + 用户证书）
+android.meta_data = com.google.android.net.NetworkSecurityConfig:res/xml/network_security_config.xml
 
 # 主题：深色沉浸
 android.theme = Theme_Dark_NoTitleBar

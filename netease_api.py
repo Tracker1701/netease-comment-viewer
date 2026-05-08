@@ -1,7 +1,9 @@
 import json
 import re
 import ssl
+import socket
 import time
+import urllib.error
 import urllib.request
 
 
@@ -13,15 +15,21 @@ HEADERS = {
     "Referer": "https://music.163.com/",
 }
 
-# p4a 打包的 Python 通常没有系统 CA bundle，禁用证书验证以避免 SSLError 崩溃
-_SSL_CTX = ssl.create_default_context()
-_SSL_CTX.check_hostname = False
-_SSL_CTX.verify_mode = ssl.CERT_NONE
+# p4a 打包的 Python 没有系统 CA bundle，
+# _create_unverified_context 完全跳过证书验证，不会尝试加载系统 CA
+try:
+    _SSL_CTX = ssl._create_unverified_context()
+except Exception:
+    # fallback: 不传 context，让 urlopen 用默认行为
+    _SSL_CTX = None
 
 
 def _get(url: str) -> dict:
     req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as response:
+    kwargs = {"timeout": 15}
+    if _SSL_CTX is not None:
+        kwargs["context"] = _SSL_CTX
+    with urllib.request.urlopen(req, **kwargs) as response:
         return json.loads(response.read().decode("utf-8"))
 
 

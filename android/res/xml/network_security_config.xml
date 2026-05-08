@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  允许 music.163.com 使用用户安装的证书（Charles/Mitmproxy 抓包用）
+  以及允许明文 HTTP 流量（防止 Android 12+ NetworkSecurityPolicy 阻止）
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+    <!-- 允许 music.163.com 明文（防止某些 CDN 只支持 HTTP 的情况） -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">music.163.com</domain>
+        <domain includeSubdomains="true">126.com</domain>
+        <domain includeSubdomains="true">127.net</domain>
+    </domain-config>
+</network-security-config>
