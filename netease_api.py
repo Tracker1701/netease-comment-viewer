@@ -2,7 +2,6 @@ import json
 import re
 import ssl
 import socket
-import struct
 import time
 import urllib.error
 import urllib.parse
@@ -32,103 +31,9 @@ def _resolve_host(host: str) -> str:
     DNS proxy (127.0.0.1:53) 在 Python 子进程命名空间里不可达，
     导致 Errno 7 (No address associated with hostname)。
 
-    这里依次尝试：
-    1. socket.gethostbyname (通常失败)
-    2. DNS-over-TCP 向 223.5.5.5 / 114.114.114.114 查询
-    3. subprocess 调用 ping 命令（使用系统DNS）
+    直接使用 subprocess 调用 ping 命令，利用系统的DNS解析能力。
+    ping 能正常工作是因为它运行在更高级别的Android系统上下文里。
     """
-    # 尝试 1: gethostbyname
-    try:
-        return socket.gethostbyname(host)
-    except socket.gaierror:
-        pass
-
-    # 尝试 2: DNS-over-TCP (用国内DNS，更可能在Android上可用)
-    for dns_server in ("223.5.5.5", "114.114.114.114", "8.8.8.8"):
-        resp = None
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect((dns_server, 53))
-
-            tx_id = struct.pack("!H", 0x0001)
-            flags = struct.pack("!H", 0x0100)   # 标准查询
-            qdcount = struct.pack("!H", 1)
-            # Question: 域名 + \x00 + QTYPE(2) + QCLASS(2)
-            qname = b"".join(struct.pack("!B", len(p)) + p.encode("ascii")
-                             for p in host.split(".")) + b"\x00"
-            qtype = struct.pack("!H", 1)   # A record
-            qclass = struct.pack("!H", 1)  # IN
-            dns_packet = tx_id + flags + qdcount + struct.pack("!H", 0) + struct.pack("!H", 0) \
-                         + qname + qtype + qclass
-
-            # DNS over TCP: 2-byte length prefix
-            sock.sendall(struct.pack("!H", len(dns_packet)) + dns_packet)
-
-            # 读取响应
-            resp_len_data = sock.recv(2)
-            if not resp_len_data:
-                sock.close()
-                continue
-            resp_len = struct.unpack("!H", resp_len_data)[0]
-            resp = b""
-            while len(resp) < resp_len:
-                chunk = sock.recv(resp_len - len(resp))
-                if not chunk:
-                    break
-                resp += chunk
-            sock.close()
-
-            # 解析 A record: 跳过 Header(12) + Question，找到 Answer 的 RDATA
-            if len(resp) >= 12:
-                qdcount_val = struct.unpack("!H", resp[4:6])[0]
-                offset = 12
-                for _ in range(qdcount_val):
-                    # 跳过域名 (label-length 格式)
-                    while offset < len(resp) and resp[offset] != 0:
-                        label_len = resp[offset]
-                        if label_len & 0xC0 == 0xC0:
-                            offset += 2
-                            break
-                        offset += label_len + 1
-                    if offset < len(resp) and resp[offset] == 0:
-                        offset += 1
-                    offset += 4  # QTYPE(2) + QCLASS(2)
-
-                # Answer: check for A record (TYPE=1)
-                while offset + 12 <= len(resp):
-                    # 域名指针或压缩
-                    if resp[offset] & 0xC0 == 0xC0:
-                        offset += 2
-                    else:
-                        while offset < len(resp) and resp[offset] != 0:
-                            lbl = resp[offset]
-                            if lbl & 0xC0 == 0xC0:
-                                offset += 2
-                                break
-                            offset += lbl + 1
-                        if offset < len(resp) and resp[offset] == 0:
-                            offset += 1
-
-                    rtype = struct.unpack("!H", resp[offset:offset + 2])[0]
-                    offset += 8  # TYPE(2) + CLASS(2) + TTL(4)
-                    rdlen = struct.unpack("!H", resp[offset:offset + 2])[0]
-                    offset += 2
-
-                    if rtype == 1 and rdlen == 4:  # A record
-                        ip = ".".join(str(b) for b in resp[offset:offset + 4])
-                        return ip
-                    offset += rdlen
-        except Exception:
-            if sock:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-        # 这个DNS服务器失败，尝试下一个
-        continue
-
-    # 尝试 3: subprocess 调用 ping 命令（使用系统DNS）
     try:
         output = subprocess.check_output(
             ["ping", "-c", "1", "-W", "3", host],
