@@ -2,8 +2,10 @@ import json
 import re
 import ssl
 import socket
+import struct
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -20,17 +22,126 @@ HEADERS = {
 try:
     _SSL_CTX = ssl._create_unverified_context()
 except Exception:
-    # fallback: 不传 context，让 urlopen 用默认行为
     _SSL_CTX = None
 
 
+def _resolve_host(host: str) -> str:
+    """
+    p4a/Android: socket.gethostbyname 依赖 /etc/resolv.conf，但 Android 的
+    DNS proxy (127.0.0.1:53) 在 Python 子进程命名空间里不可达，
+    导致 Errno 7 (No address associated with hostname)。
+
+    这里通过直接向 8.8.8.8:53 发送 DNS-over-TCP 查询来绕过系统 DNS。
+    """
+    try:
+        return socket.gethostbyname(host)
+    except socket.gaierror:
+        pass
+
+    try:
+        # DNS-over-TCP A record 查询
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect(("8.8.8.8", 53))
+
+        tx_id = struct.pack("!H", 0x0001)
+        flags = struct.pack("!H", 0x0100)   # 标准查询
+        qdcount = struct.pack("!H", 1)
+        # Question: 域名 + \x00 + QTYPE(2) + QCLASS(2)
+        qname = b"".join(struct.pack("!B", len(p)) + p.encode("ascii")
+                         for p in host.split(".")) + b"\x00"
+        qtype = struct.pack("!H", 1)   # A record
+        qclass = struct.pack("!H", 1)  # IN
+        dns_packet = tx_id + flags + qdcount + struct.pack("!H", 0) + struct.pack("!H", 0) \
+                     + qname + qtype + qclass
+
+        # DNS over TCP: 2-byte length prefix
+        sock.sendall(struct.pack("!H", len(dns_packet)) + dns_packet)
+
+        # 读取响应
+        resp_len = struct.unpack("!H", sock.recv(2))[0]
+        resp = b""
+        while len(resp) < resp_len:
+            chunk = sock.recv(resp_len - len(resp))
+            if not chunk:
+                break
+            resp += chunk
+        sock.close()
+
+        # 解析 A record: 跳过 Header(12) + Question，找到 Answer 的 RDATA
+        if len(resp) >= 12:
+            qdcount_val = struct.unpack("!H", resp[4:6])[0]
+            offset = 12
+            for _ in range(qdcount_val):
+                # 跳过域名 (label-length 格式)
+                while offset < len(resp) and resp[offset] != 0:
+                    label_len = resp[offset]
+                    if label_len & 0xC0 == 0xC0:
+                        offset += 2
+                        break
+                    offset += label_len + 1
+                if offset < len(resp) and resp[offset] == 0:
+                    offset += 1
+                offset += 4  # QTYPE(2) + QCLASS(2)
+
+            # Answer: check for A record (TYPE=1)
+            while offset + 12 <= len(resp):
+                # 域名指针或压缩
+                if resp[offset] & 0xC0 == 0xC0:
+                    offset += 2
+                else:
+                    while offset < len(resp) and resp[offset] != 0:
+                        lbl = resp[offset]
+                        if lbl & 0xC0 == 0xC0:
+                            offset += 2
+                            break
+                        offset += lbl + 1
+                    if offset < len(resp) and resp[offset] == 0:
+                        offset += 1
+
+                rtype = struct.unpack("!H", resp[offset:offset + 2])[0]
+                offset += 8  # TYPE(2) + CLASS(2) + TTL(4)
+                rdlen = struct.unpack("!H", resp[offset:offset + 2])[0]
+                offset += 2
+
+                if rtype == 1 and rdlen == 4:  # A record
+                    ip = ".".join(str(b) for b in resp[offset:offset + 4])
+                    return ip
+                offset += rdlen
+    except Exception:
+        pass
+
+    raise socket.gaierror(f"failed to resolve {host}")
+
+
 def _get(url: str) -> dict:
-    req = urllib.request.Request(url, headers=HEADERS)
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname
+
     kwargs = {"timeout": 15}
     if _SSL_CTX is not None:
         kwargs["context"] = _SSL_CTX
-    with urllib.request.urlopen(req, **kwargs) as response:
-        return json.loads(response.read().decode("utf-8"))
+
+    try:
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, **kwargs) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except socket.gaierror:
+        # DNS 失败 → 用 8.8.8.8 直接解析，然后用 IP 直连
+        ip = _resolve_host(host)
+        if parsed.port:
+            netloc = f"{ip}:{parsed.port}"
+        else:
+            netloc = ip
+        url_with_ip = urllib.parse.urlunparse((
+            parsed.scheme, netloc, parsed.path,
+            parsed.params, parsed.query, parsed.fragment,
+        ))
+        new_headers = dict(HEADERS)
+        new_headers["Host"] = host
+        req2 = urllib.request.Request(url_with_ip, headers=new_headers)
+        with urllib.request.urlopen(req2, **kwargs) as response:
+            return json.loads(response.read().decode("utf-8"))
 
 
 def parse_url(text: str):
