@@ -45,6 +45,7 @@ def _resolve_host(host: str) -> str:
 
     # 尝试 2: DNS-over-TCP (用国内DNS，更可能在Android上可用)
     for dns_server in ("223.5.5.5", "114.114.114.114", "8.8.8.8"):
+        resp = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
@@ -65,7 +66,11 @@ def _resolve_host(host: str) -> str:
             sock.sendall(struct.pack("!H", len(dns_packet)) + dns_packet)
 
             # 读取响应
-            resp_len = struct.unpack("!H", sock.recv(2))[0]
+            resp_len_data = sock.recv(2)
+            if not resp_len_data:
+                sock.close()
+                continue
+            resp_len = struct.unpack("!H", resp_len_data)[0]
             resp = b""
             while len(resp) < resp_len:
                 chunk = sock.recv(resp_len - len(resp))
@@ -74,49 +79,53 @@ def _resolve_host(host: str) -> str:
                 resp += chunk
             sock.close()
 
-        # 解析 A record: 跳过 Header(12) + Question，找到 Answer 的 RDATA
-        if len(resp) >= 12:
-            qdcount_val = struct.unpack("!H", resp[4:6])[0]
-            offset = 12
-            for _ in range(qdcount_val):
-                # 跳过域名 (label-length 格式)
-                while offset < len(resp) and resp[offset] != 0:
-                    label_len = resp[offset]
-                    if label_len & 0xC0 == 0xC0:
-                        offset += 2
-                        break
-                    offset += label_len + 1
-                if offset < len(resp) and resp[offset] == 0:
-                    offset += 1
-                offset += 4  # QTYPE(2) + QCLASS(2)
-
-            # Answer: check for A record (TYPE=1)
-            while offset + 12 <= len(resp):
-                # 域名指针或压缩
-                if resp[offset] & 0xC0 == 0xC0:
-                    offset += 2
-                else:
+            # 解析 A record: 跳过 Header(12) + Question，找到 Answer 的 RDATA
+            if len(resp) >= 12:
+                qdcount_val = struct.unpack("!H", resp[4:6])[0]
+                offset = 12
+                for _ in range(qdcount_val):
+                    # 跳过域名 (label-length 格式)
                     while offset < len(resp) and resp[offset] != 0:
-                        lbl = resp[offset]
-                        if lbl & 0xC0 == 0xC0:
+                        label_len = resp[offset]
+                        if label_len & 0xC0 == 0xC0:
                             offset += 2
                             break
-                        offset += lbl + 1
+                        offset += label_len + 1
                     if offset < len(resp) and resp[offset] == 0:
                         offset += 1
+                    offset += 4  # QTYPE(2) + QCLASS(2)
 
-                rtype = struct.unpack("!H", resp[offset:offset + 2])[0]
-                offset += 8  # TYPE(2) + CLASS(2) + TTL(4)
-                rdlen = struct.unpack("!H", resp[offset:offset + 2])[0]
-                offset += 2
+                # Answer: check for A record (TYPE=1)
+                while offset + 12 <= len(resp):
+                    # 域名指针或压缩
+                    if resp[offset] & 0xC0 == 0xC0:
+                        offset += 2
+                    else:
+                        while offset < len(resp) and resp[offset] != 0:
+                            lbl = resp[offset]
+                            if lbl & 0xC0 == 0xC0:
+                                offset += 2
+                                break
+                            offset += lbl + 1
+                        if offset < len(resp) and resp[offset] == 0:
+                            offset += 1
 
-                if rtype == 1 and rdlen == 4:  # A record
-                    ip = ".".join(str(b) for b in resp[offset:offset + 4])
-                    return ip
-                offset += rdlen
+                    rtype = struct.unpack("!H", resp[offset:offset + 2])[0]
+                    offset += 8  # TYPE(2) + CLASS(2) + TTL(4)
+                    rdlen = struct.unpack("!H", resp[offset:offset + 2])[0]
+                    offset += 2
+
+                    if rtype == 1 and rdlen == 4:  # A record
+                        ip = ".".join(str(b) for b in resp[offset:offset + 4])
+                        return ip
+                    offset += rdlen
         except Exception:
-            pass
-        # DNS-over-TCP 失败，尝试下一个 DNS 服务器
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+        # 这个DNS服务器失败，尝试下一个
         continue
 
     # 尝试 3: subprocess 调用 ping 命令（使用系统DNS）
