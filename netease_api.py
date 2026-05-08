@@ -31,12 +31,12 @@ def _resolve_host(host: str) -> str:
     DNS proxy (127.0.0.1:53) 在 Python 子进程命名空间里不可达，
     导致 Errno 7 (No address associated with hostname)。
 
-    直接使用 subprocess 调用 ping 命令，利用系统的DNS解析能力。
+    直接使用 subprocess 调用 /system/bin/ping 命令，利用系统的DNS解析能力。
     ping 能正常工作是因为它运行在更高级别的Android系统上下文里。
     """
     try:
         output = subprocess.check_output(
-            ["ping", "-c", "1", "-W", "3", host],
+            ["/system/bin/ping", "-c", "1", "-W", "3", host],
             stderr=subprocess.STDOUT,
             timeout=5
         )
