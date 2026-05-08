@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import subprocess
 
 
 HEADERS = {
@@ -31,42 +32,47 @@ def _resolve_host(host: str) -> str:
     DNS proxy (127.0.0.1:53) 在 Python 子进程命名空间里不可达，
     导致 Errno 7 (No address associated with hostname)。
 
-    这里通过直接向 8.8.8.8:53 发送 DNS-over-TCP 查询来绕过系统 DNS。
+    这里依次尝试：
+    1. socket.gethostbyname (通常失败)
+    2. DNS-over-TCP 向 223.5.5.5 / 114.114.114.114 查询
+    3. subprocess 调用 ping 命令（使用系统DNS）
     """
+    # 尝试 1: gethostbyname
     try:
         return socket.gethostbyname(host)
     except socket.gaierror:
         pass
 
-    try:
-        # DNS-over-TCP A record 查询
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(5)
-        sock.connect(("8.8.8.8", 53))
+    # 尝试 2: DNS-over-TCP (用国内DNS，更可能在Android上可用)
+    for dns_server in ("223.5.5.5", "114.114.114.114", "8.8.8.8"):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((dns_server, 53))
 
-        tx_id = struct.pack("!H", 0x0001)
-        flags = struct.pack("!H", 0x0100)   # 标准查询
-        qdcount = struct.pack("!H", 1)
-        # Question: 域名 + \x00 + QTYPE(2) + QCLASS(2)
-        qname = b"".join(struct.pack("!B", len(p)) + p.encode("ascii")
-                         for p in host.split(".")) + b"\x00"
-        qtype = struct.pack("!H", 1)   # A record
-        qclass = struct.pack("!H", 1)  # IN
-        dns_packet = tx_id + flags + qdcount + struct.pack("!H", 0) + struct.pack("!H", 0) \
-                     + qname + qtype + qclass
+            tx_id = struct.pack("!H", 0x0001)
+            flags = struct.pack("!H", 0x0100)   # 标准查询
+            qdcount = struct.pack("!H", 1)
+            # Question: 域名 + \x00 + QTYPE(2) + QCLASS(2)
+            qname = b"".join(struct.pack("!B", len(p)) + p.encode("ascii")
+                             for p in host.split(".")) + b"\x00"
+            qtype = struct.pack("!H", 1)   # A record
+            qclass = struct.pack("!H", 1)  # IN
+            dns_packet = tx_id + flags + qdcount + struct.pack("!H", 0) + struct.pack("!H", 0) \
+                         + qname + qtype + qclass
 
-        # DNS over TCP: 2-byte length prefix
-        sock.sendall(struct.pack("!H", len(dns_packet)) + dns_packet)
+            # DNS over TCP: 2-byte length prefix
+            sock.sendall(struct.pack("!H", len(dns_packet)) + dns_packet)
 
-        # 读取响应
-        resp_len = struct.unpack("!H", sock.recv(2))[0]
-        resp = b""
-        while len(resp) < resp_len:
-            chunk = sock.recv(resp_len - len(resp))
-            if not chunk:
-                break
-            resp += chunk
-        sock.close()
+            # 读取响应
+            resp_len = struct.unpack("!H", sock.recv(2))[0]
+            resp = b""
+            while len(resp) < resp_len:
+                chunk = sock.recv(resp_len - len(resp))
+                if not chunk:
+                    break
+                resp += chunk
+            sock.close()
 
         # 解析 A record: 跳过 Header(12) + Question，找到 Answer 的 RDATA
         if len(resp) >= 12:
@@ -108,6 +114,24 @@ def _resolve_host(host: str) -> str:
                     ip = ".".join(str(b) for b in resp[offset:offset + 4])
                     return ip
                 offset += rdlen
+        except Exception:
+            pass
+        # DNS-over-TCP 失败，尝试下一个 DNS 服务器
+        continue
+
+    # 尝试 3: subprocess 调用 ping 命令（使用系统DNS）
+    try:
+        output = subprocess.check_output(
+            ["ping", "-c", "1", "-W", "3", host],
+            stderr=subprocess.STDOUT,
+            timeout=5
+        )
+        output_str = output.decode("utf-8", errors="ignore")
+        # 解析 ping 输出中的 IP 地址
+        # 格式: PING host (IP) 56(...) bytes of data.
+        match = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", output_str)
+        if match:
+            return match.group(1)
     except Exception:
         pass
 
