@@ -1,5 +1,6 @@
 import json
 import re
+import ssl
 import time
 import urllib.request
 
@@ -12,10 +13,15 @@ HEADERS = {
     "Referer": "https://music.163.com/",
 }
 
+# p4a 打包的 Python 通常没有系统 CA bundle，禁用证书验证以避免 SSLError 崩溃
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
+
 
 def _get(url: str) -> dict:
     req = urllib.request.Request(url, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=15) as response:
+    with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as response:
         return json.loads(response.read().decode("utf-8"))
 
 

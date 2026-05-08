@@ -1,4 +1,6 @@
 import os
+import sys
+import traceback
 from threading import Thread
 
 from kivy.app import App
@@ -17,12 +19,57 @@ from kivy.uix.textinput import TextInput
 
 from netease_api import parse_url, query_album, query_artist
 
-# ── 注册中文字体 ──────────────────────────────────────────────────────────────
-# fonts/NotoSansSC.otf 与 main.py 同目录（source.dir = .）
-_FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NotoSansSC.otf")
-LabelBase.register(name="NotoSansSC", fn_regular=_FONT_PATH)
+# ── 注册中文字体（带保护，字体找不到时回退 Roboto） ────────────────────────────
+_FONT = "Roboto"  # 默认回退
 
-_FONT = "NotoSansSC"
+def _resolve_font_path():
+    """
+    在 Android APK 里 __file__ 是 .zip 内的路径，不能直接用。
+    p4a 把 private 目录暴露在 ANDROID_PRIVATE 或 os.environ['ANDROID_ARGUMENT']，
+    同时也可通过 kivy 的 resource_find 定位。
+    """
+    candidates = []
+
+    # 1. 通过 kivy resource_find（最可靠，能处理 APK 内路径）
+    try:
+        from kivy.resources import resource_find
+        found = resource_find("fonts/NotoSansSC.otf")
+        if found:
+            candidates.append(found)
+    except Exception:
+        pass
+
+    # 2. 相对 main.py 的路径（桌面端/开发环境）
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(os.path.join(base, "fonts", "NotoSansSC.otf"))
+    except Exception:
+        pass
+
+    # 3. ANDROID_PRIVATE 环境变量
+    android_private = os.environ.get("ANDROID_PRIVATE", "")
+    if android_private:
+        candidates.append(os.path.join(android_private, "fonts", "NotoSansSC.otf"))
+
+    # 4. 当前工作目录
+    candidates.append(os.path.join(os.getcwd(), "fonts", "NotoSansSC.otf"))
+
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+try:
+    font_path = _resolve_font_path()
+    if font_path:
+        LabelBase.register(name="NotoSansSC", fn_regular=font_path)
+        _FONT = "NotoSansSC"
+        print(f"[font] NotoSansSC loaded from {font_path}", file=sys.stderr)
+    else:
+        print("[font] NotoSansSC.otf not found, falling back to Roboto", file=sys.stderr)
+except Exception as e:
+    print(f"[font] register failed: {e}, falling back to Roboto", file=sys.stderr)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -196,7 +243,9 @@ class Root(BoxLayout):
 
             Clock.schedule_once(lambda _dt: self._show_result(rows, summary))
         except Exception as exc:
-            Clock.schedule_once(lambda _dt: self._show_error(str(exc)))
+            err_msg = f"{type(exc).__name__}: {exc}"
+            print(f"[query] error: {traceback.format_exc()}", file=sys.stderr)
+            Clock.schedule_once(lambda _dt: self._show_error(err_msg))
         finally:
             Clock.schedule_once(lambda _dt: setattr(self.query_button, "disabled", False))
 

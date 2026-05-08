@@ -19,6 +19,7 @@ jobs:
       USE_CCACHE: "1"
       P4A_ANDROID_NDK_API: "21"
       PYTHONUNBUFFERED: "1"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout code
