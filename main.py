@@ -1,7 +1,9 @@
+import os
 from threading import Thread
 
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.core.text import LabelBase
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty, ListProperty, NumericProperty, StringProperty
 from kivy.uix.boxlayout import BoxLayout
@@ -15,6 +17,14 @@ from kivy.uix.textinput import TextInput
 
 from netease_api import parse_url, query_album, query_artist
 
+# ── 注册中文字体 ──────────────────────────────────────────────────────────────
+# fonts/NotoSansSC.otf 与 main.py 同目录（source.dir = .）
+_FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "NotoSansSC.otf")
+LabelBase.register(name="NotoSansSC", fn_regular=_FONT_PATH)
+
+_FONT = "NotoSansSC"
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 class ResultRow(RecycleDataViewBehavior, BoxLayout):
     album = StringProperty("")
@@ -26,9 +36,15 @@ class ResultRow(RecycleDataViewBehavior, BoxLayout):
         super().__init__(orientation="horizontal", size_hint_y=None, height=dp(54), **kwargs)
         self.padding = [dp(10), dp(6), dp(10), dp(6)]
         self.spacing = dp(8)
-        self.album_label = Label(halign="left", valign="middle", size_hint_x=0.34)
-        self.song_label = Label(halign="left", valign="middle", size_hint_x=0.46)
-        self.comments_label = Label(halign="right", valign="middle", size_hint_x=0.2)
+        self.album_label = Label(
+            halign="left", valign="middle", size_hint_x=0.34, font_name=_FONT
+        )
+        self.song_label = Label(
+            halign="left", valign="middle", size_hint_x=0.46, font_name=_FONT
+        )
+        self.comments_label = Label(
+            halign="right", valign="middle", size_hint_x=0.2, font_name=_FONT
+        )
         self.add_widget(self.album_label)
         self.add_widget(self.song_label)
         self.add_widget(self.comments_label)
@@ -81,6 +97,7 @@ class Root(BoxLayout):
             height=dp(42),
             bold=True,
             font_size="20sp",
+            font_name=_FONT,
             color=(0.78, 0.18, 0.18, 1),
         )
         self.add_widget(title)
@@ -92,13 +109,22 @@ class Root(BoxLayout):
             size_hint_y=None,
             height=dp(96),
             font_size="16sp",
+            font_name=_FONT,
         )
         self.add_widget(self.input_text)
 
         button_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(10))
-        self.query_button = Button(text="开始查询", background_color=(0.78, 0.18, 0.18, 1))
+        self.query_button = Button(
+            text="开始查询",
+            background_color=(0.78, 0.18, 0.18, 1),
+            font_name=_FONT,
+        )
         self.query_button.bind(on_press=self.start_query)
-        clear_button = Button(text="清空", background_color=(0.55, 0.55, 0.55, 1))
+        clear_button = Button(
+            text="清空",
+            background_color=(0.55, 0.55, 0.55, 1),
+            font_name=_FONT,
+        )
         clear_button.bind(on_press=self.clear)
         button_row.add_widget(self.query_button)
         button_row.add_widget(clear_button)
@@ -114,6 +140,7 @@ class Root(BoxLayout):
             height=dp(30),
             halign="left",
             valign="middle",
+            font_name=_FONT,
             color=(0.42, 0.42, 0.42, 1),
         )
         self.status_label.bind(size=lambda label, _size: setattr(label, "text_size", label.size))
@@ -130,6 +157,7 @@ class Root(BoxLayout):
             halign="left",
             valign="middle",
             bold=True,
+            font_name=_FONT,
             color=(0.78, 0.18, 0.18, 1),
         )
         self.summary_label.bind(size=lambda label, _size: setattr(label, "text_size", label.size))
