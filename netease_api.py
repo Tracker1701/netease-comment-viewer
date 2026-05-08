@@ -122,12 +122,8 @@ def _get(url: str) -> dict:
     if _SSL_CTX is not None:
         kwargs["context"] = _SSL_CTX
 
-    try:
-        req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, **kwargs) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except socket.gaierror:
-        # DNS 失败 → 用 8.8.8.8 直接解析，然后用 IP 直连
+    def resolve_and_retry():
+        """DNS 失败 → 用 8.8.8.8 直接解析，然后用 IP 直连"""
         ip = _resolve_host(host)
         if parsed.port:
             netloc = f"{ip}:{parsed.port}"
@@ -142,6 +138,20 @@ def _get(url: str) -> dict:
         req2 = urllib.request.Request(url_with_ip, headers=new_headers)
         with urllib.request.urlopen(req2, **kwargs) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    try:
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, **kwargs) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except socket.gaierror:
+        # socket 直接报错（极少数）
+        return resolve_and_retry()
+    except urllib.error.URLError as e:
+        # urlopen 把 socket.gaierror 包装成 URLError，reason 属性才是原始错误
+        if isinstance(e.reason, socket.gaierror):
+            return resolve_and_retry()
+        else:
+            raise
 
 
 def parse_url(text: str):
