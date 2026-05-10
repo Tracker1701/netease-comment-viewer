@@ -40,11 +40,38 @@ _PAD_H = dp(14)   # horizontal padding inside each row (left + right each)
 _GAP   = dp(10)   # spacing between left and right label
 # ─────────────────────────────────────────────────────────────────────────────
 
-_FONT = "Roboto"
+_FONT = "Roboto"   # Kivy default; replaced below if a better font is found
+_FONT_PATH = None
 
 
 def _resolve_font():
+    """
+    Pick the best available font with BROAD Unicode coverage.
+    Priority:
+      1. Android system fonts (DroidSansFallback / NotoSansCJK / …)
+      2. Bundled NotoSansSC.otf  (CJK + basic Latin)
+      3. Roboto (Kivy built-in)
+    Android system fonts cover Greek, symbols, CJK, Arabic, etc. –
+    exactly what NotoSansSC.otf (SC subset) is missing.
+    """
     cands = []
+
+    # ── 1. Android system fonts (huge Unicode coverage) ────────────────────
+    # DroidSansFallback.ttf exists on Android 4-5; newer versions use NotoSans*.
+    # All are world-readable (/system/fonts/ mode 0644).
+    if os.path.exists("/system/bin/app_process"):
+        _sys_fonts = [
+            "/system/fonts/DroidSansFallback.ttf",
+            "/system/fonts/NotoSansCJK-Regular.ttc",
+            "/system/fonts/NotoSans-Regular.ttf",
+            "/system/fonts/NotoSansSC-Regular.otf",
+            "/system/fonts/Roboto-Regular.ttf",
+        ]
+        for p in _sys_fonts:
+            if os.path.isfile(p):
+                cands.append(p)
+
+    # ── 2. Bundled NotoSansSC.otf (CJK + basic Latin) ───────────────────
     try:
         from kivy.resources import resource_find
         f = resource_find("fonts/NotoSansSC.otf")
@@ -61,6 +88,8 @@ def _resolve_font():
     if ap:
         cands.append(os.path.join(ap, "fonts", "NotoSansSC.otf"))
     cands.append(os.path.join(os.getcwd(), "fonts", "NotoSansSC.otf"))
+
+    # ── 3. Pick first candidate that actually exists ───────────────────────
     for p in cands:
         if p and os.path.isfile(p):
             return p
@@ -70,11 +99,18 @@ def _resolve_font():
 try:
     _fp = _resolve_font()
     if _fp:
-        LabelBase.register(name="NotoSansSC", fn_regular=_fp)
-        _FONT = "NotoSansSC"
+        _FONT_PATH = _fp
+        # Kivy accepts a file path directly in font_name – no registration needed.
+        # We still register an alias so widgets can use a short name.
+        try:
+            LabelBase.register(name="AppFont", fn_regular=_fp)
+            _FONT = "AppFont"
+        except Exception:
+            # If registration fails (e.g. TTC format), use the path directly.
+            _FONT = _fp
         print(f"[font] loaded {_fp}", file=sys.stderr)
     else:
-        print("[font] NotoSansSC not found, using Roboto", file=sys.stderr)
+        print("[font] No font found, using Roboto", file=sys.stderr)
 except Exception as e:
     print(f"[font] {e}", file=sys.stderr)
 
