@@ -1,12 +1,13 @@
 import json
+import os
 import re
 import ssl
 import socket
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import subprocess
 
 
 HEADERS = {
@@ -17,79 +18,123 @@ HEADERS = {
     "Referer": "https://music.163.com/",
 }
 
-# p4a 打包的 Python 没有系统 CA bundle，
-# _create_unverified_context 完全跳过证书验证，不会尝试加载系统 CA
 try:
     _SSL_CTX = ssl._create_unverified_context()
 except Exception:
     _SSL_CTX = None
 
+_IS_ANDROID = os.path.exists("/system/bin/app_process")
+
+
+def _java_http_get(url: str) -> dict:
+    """Use Android's native HTTP stack via pyjnius (bypasses Python DNS/SSL entirely)."""
+    from jnius import autoclass
+    URL = autoclass("java.net.URL")
+    BufferedReader = autoclass("java.io.BufferedReader")
+    InputStreamReader = autoclass("java.io.InputStreamReader")
+
+    java_url = URL(url)
+    conn = java_url.openConnection()
+    conn.setConnectTimeout(15000)
+    conn.setReadTimeout(15000)
+    conn.setRequestProperty("User-Agent", HEADERS["User-Agent"])
+    conn.setRequestProperty("Referer", HEADERS["Referer"])
+
+    code = conn.getResponseCode()
+    if code < 200 or code >= 300:
+        raise OSError(f"HTTP {code}")
+
+    reader = BufferedReader(InputStreamReader(conn.getInputStream(), "UTF-8"))
+    lines = []
+    line = reader.readLine()
+    while line is not None:
+        lines.append(line)
+        line = reader.readLine()
+    reader.close()
+    conn.disconnect()
+
+    return json.loads("".join(lines))
+
 
 def _resolve_host(host: str) -> str:
-    """
-    p4a/Android: socket.gethostbyname 依赖 /etc/resolv.conf，但 Android 的
-    DNS proxy (127.0.0.1:53) 在 Python 子进程命名空间里不可达，
-    导致 Errno 7 (No address associated with hostname)。
+    """Try multiple DNS strategies: Java InetAddress → ping → DoH → fail."""
+    # 1. Android Java InetAddress (most reliable on Android/HarmonyOS)
+    if _IS_ANDROID:
+        try:
+            from jnius import autoclass
+            InetAddress = autoclass("java.net.InetAddress")
+            return InetAddress.getByName(host).getHostAddress()
+        except Exception as e:
+            print(f"[dns] java InetAddress failed: {e}", file=sys.stderr)
 
-    直接使用 subprocess 调用 /system/bin/ping 命令，利用系统的DNS解析能力。
-    ping 能正常工作是因为它运行在更高级别的Android系统上下文里。
-    """
+    # 2. System ping
     try:
+        import subprocess
         output = subprocess.check_output(
             ["/system/bin/ping", "-c", "1", "-W", "3", host],
             stderr=subprocess.STDOUT,
-            timeout=5
+            timeout=5,
         )
-        output_str = output.decode("utf-8", errors="ignore")
-        # 解析 ping 输出中的 IP 地址
-        # 格式: PING host (IP) 56(...) bytes of data.
-        match = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", output_str)
-        if match:
-            return match.group(1)
-    except Exception:
-        pass
+        m = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", output.decode("utf-8", errors="ignore"))
+        if m:
+            return m.group(1)
+    except Exception as e:
+        print(f"[dns] ping failed: {e}", file=sys.stderr)
 
-    raise socket.gaierror(f"failed to resolve {host}")
+    # 3. DNS-over-HTTPS via Cloudflare 1.1.1.1 (hard-coded IP — no DNS needed)
+    try:
+        doh_url = f"https://1.1.1.1/dns-query?name={urllib.parse.quote(host)}&type=A"
+        req = urllib.request.Request(doh_url, headers={"Accept": "application/dns-json"})
+        ctx_kw = {"context": _SSL_CTX} if _SSL_CTX else {}
+        with urllib.request.urlopen(req, timeout=8, **ctx_kw) as r:
+            data = json.loads(r.read())
+            for ans in data.get("Answer", []):
+                if ans.get("type") == 1:  # A record
+                    return ans["data"]
+    except Exception as e:
+        print(f"[dns] DoH failed: {e}", file=sys.stderr)
+
+    raise socket.gaierror(f"failed to resolve {host} (all DNS methods exhausted)")
 
 
 def _get(url: str) -> dict:
+    """Fetch URL and return parsed JSON.  On Android, tries native Java HTTP first."""
+    # Android: native Java HTTP bypasses Python's DNS and SSL stacks entirely
+    if _IS_ANDROID:
+        try:
+            return _java_http_get(url)
+        except Exception as e:
+            print(f"[net] Java HTTP failed ({e}), falling back to urllib", file=sys.stderr)
+
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname
+    ctx_kw = {"timeout": 15}
+    if _SSL_CTX:
+        ctx_kw["context"] = _SSL_CTX
 
-    kwargs = {"timeout": 15}
-    if _SSL_CTX is not None:
-        kwargs["context"] = _SSL_CTX
-
-    def resolve_and_retry():
-        """DNS 失败 → 用 8.8.8.8 直接解析，然后用 IP 直连"""
+    def resolve_and_retry() -> dict:
         ip = _resolve_host(host)
-        if parsed.port:
-            netloc = f"{ip}:{parsed.port}"
-        else:
-            netloc = ip
-        url_with_ip = urllib.parse.urlunparse((
+        netloc = f"{ip}:{parsed.port}" if parsed.port else ip
+        url_ip = urllib.parse.urlunparse((
             parsed.scheme, netloc, parsed.path,
             parsed.params, parsed.query, parsed.fragment,
         ))
-        new_headers = dict(HEADERS)
-        new_headers["Host"] = host
-        req2 = urllib.request.Request(url_with_ip, headers=new_headers)
-        with urllib.request.urlopen(req2, **kwargs) as response:
-            return json.loads(response.read().decode("utf-8"))
+        hdrs = dict(HEADERS)
+        hdrs["Host"] = host
+        req2 = urllib.request.Request(url_ip, headers=hdrs)
+        with urllib.request.urlopen(req2, **ctx_kw) as r:
+            return json.loads(r.read().decode("utf-8"))
 
     try:
         req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, **kwargs) as response:
-            return json.loads(response.read().decode("utf-8"))
+        with urllib.request.urlopen(req, **ctx_kw) as r:
+            return json.loads(r.read().decode("utf-8"))
     except socket.gaierror:
-        # socket 直接报错（极少数）
         return resolve_and_retry()
     except urllib.error.URLError as e:
-        # urlopen 把 socket.gaierror 包装成 URLError，reason 属性才是原始错误
         if isinstance(e.reason, socket.gaierror):
             return resolve_and_retry()
-        else:
-            raise
+        raise
 
 
 def parse_url(text: str):
@@ -115,7 +160,7 @@ def parse_url(text: str):
     return None
 
 
-def get_album_detail(album_id: str) -> tuple[str, list[dict]]:
+def get_album_detail(album_id: str) -> tuple:
     data = _get(f"https://music.163.com/api/v1/album/{album_id}")
     album_name = data.get("album", {}).get("name") or f"专辑 #{album_id}"
     songs = [{"id": str(song["id"]), "name": song["name"]} for song in data.get("songs", [])]
@@ -140,7 +185,7 @@ def get_album_comment_count(album_id: str) -> int:
         return -1
 
 
-def get_artist_albums(artist_id: str) -> list[dict]:
+def get_artist_albums(artist_id: str) -> list:
     albums = []
     offset = 0
     limit = 30
@@ -154,13 +199,11 @@ def get_artist_albums(artist_id: str) -> list[dict]:
         batch = data.get("hotAlbums", [])
 
         for album in batch:
-            albums.append(
-                {
-                    "id": str(album["id"]),
-                    "name": album.get("name", f"专辑 #{album['id']}"),
-                    "publishTime": album.get("publishTime", 0),
-                }
-            )
+            albums.append({
+                "id": str(album["id"]),
+                "name": album.get("name", f"专辑 #{album['id']}"),
+                "publishTime": album.get("publishTime", 0),
+            })
 
         if not data.get("more", False) or not batch:
             break
@@ -175,7 +218,7 @@ def format_count(count: int) -> str:
     return f"{count:,}" if count >= 0 else "获取失败"
 
 
-def query_album(album_id: str, on_progress=None) -> tuple[list[dict], str]:
+def query_album(album_id: str, on_progress=None) -> tuple:
     album_name, songs = get_album_detail(album_id)
     album_comments = get_album_comment_count(album_id)
     total_song_comments = 0
@@ -196,14 +239,12 @@ def query_album(album_id: str, on_progress=None) -> tuple[list[dict], str]:
         count = get_song_comment_count(song["id"])
         if count >= 0:
             total_song_comments += count
-        rows.append(
-            {
-                "album": album_name,
-                "song": song["name"],
-                "comments": format_count(count),
-                "is_header": False,
-            }
-        )
+        rows.append({
+            "album": album_name,
+            "song": song["name"],
+            "comments": format_count(count),
+            "is_header": False,
+        })
         time.sleep(0.15)
 
     summary = (
@@ -213,7 +254,7 @@ def query_album(album_id: str, on_progress=None) -> tuple[list[dict], str]:
     return rows, summary
 
 
-def query_artist(artist_id: str, on_progress=None) -> tuple[list[dict], str]:
+def query_artist(artist_id: str, on_progress=None) -> tuple:
     albums = get_artist_albums(artist_id)
     rows = []
     grand_songs = 0
@@ -230,14 +271,12 @@ def query_artist(artist_id: str, on_progress=None) -> tuple[list[dict], str]:
             songs = []
 
         album_comments = get_album_comment_count(album["id"])
-        rows.append(
-            {
-                "album": album["name"],
-                "song": f"共 {len(songs)} 首 | 专辑评论 {format_count(album_comments)}",
-                "comments": "",
-                "is_header": True,
-            }
-        )
+        rows.append({
+            "album": album["name"],
+            "song": f"共 {len(songs)} 首 | 专辑评论 {format_count(album_comments)}",
+            "comments": "",
+            "is_header": True,
+        })
 
         for song_index, song in enumerate(songs, 1):
             if on_progress:
@@ -250,14 +289,12 @@ def query_artist(artist_id: str, on_progress=None) -> tuple[list[dict], str]:
             count = get_song_comment_count(song["id"])
             if count >= 0:
                 grand_comments += count
-            rows.append(
-                {
-                    "album": album["name"],
-                    "song": song["name"],
-                    "comments": format_count(count),
-                    "is_header": False,
-                }
-            )
+            rows.append({
+                "album": album["name"],
+                "song": song["name"],
+                "comments": format_count(count),
+                "is_header": False,
+            })
             time.sleep(0.15)
 
         grand_songs += len(songs)

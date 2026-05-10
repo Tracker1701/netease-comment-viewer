@@ -253,7 +253,7 @@ class Root(BoxLayout):
         self.progress = current / max(total, 1) * 100
         self.status = message
 
-    def _show_result(self, rows: list[dict], summary: str):
+    def _show_result(self, rows: list, summary: str):
         self.results.data = rows
         self.progress = 100
         self.status = "完成"

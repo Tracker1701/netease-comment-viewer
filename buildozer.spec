@@ -15,8 +15,8 @@ mainmodule = main
 # Kivy 版本（固定兼容版本）
 version = 0.1.0
 
-# 依赖（核心 Kivy + KivyMD）
-requirements = python3,kivy==2.3.0,kivymd==1.1.1,pillow,urllib3
+# 依赖（仅使用核心 Kivy，不引入未使用的 KivyMD）
+requirements = python3,kivy==2.3.0,pillow
 
 # Android 最低版本
 android.minapi = 21
@@ -25,14 +25,14 @@ android.api = 34
 # 权限（网络）
 android.permissions = INTERNET,ACCESS_NETWORK_STATE
 
-# 网络安全配置（允许明文流量 + 用户证书）
-android.meta_data = com.google.android.net.NetworkSecurityConfig:res/xml/network_security_config.xml
+# Java 源码目录（CloudHttpHelper.java）
+android.add_src = java
 
-# 主题：深色沉浸
-android.theme = Theme_Dark_NoTitleBar
+# 网络安全配置资源目录（含 res/xml/network_security_config.xml）
+android.res = android/res
 
-# 禁止点击水波纹（可选）
-android.backdrop_color = 0.1, 0.1, 0.1, 1
+# manifest application 属性：启用网络安全配置
+android.manifest.application_attributes = android:networkSecurityConfig="@xml/network_security_config"
 
 # App 图标（默认用 Kivy 内置）
 # icon.filename = %(source.dir)s/icon.png
