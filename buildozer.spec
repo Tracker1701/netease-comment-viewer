@@ -34,8 +34,8 @@ android.res = android/res
 # manifest application 属性：启用网络安全配置
 android.manifest.application_attributes = android:networkSecurityConfig="@xml/network_security_config"
 
-# App 图标：项目根目录 icon.png（512×512，Android 8+ 自适应图标）
-icon.filename = %(source.dir)s/icon.png
+# App 图标：项目根目录 icon.png（512×512）
+icon.filename = icon.png
 
 # 启动画面（可选）
 # splashimage.filename = %(source.dir)s/splash.png
