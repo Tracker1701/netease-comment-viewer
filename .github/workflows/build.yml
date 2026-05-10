@@ -3,6 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -476,6 +477,32 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && steps.collect.outputs.apk_found == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "云评 ${{ github.ref_name }}"
+          body: |
+            ## 云评 ${{ github.ref_name }}
+
+            网易云音乐评论数查看器 Android 版。
+
+            ### 安装方法
+            1. 下载下方 APK 文件
+            2. 传输到 Android 手机
+            3. 打开文件，允许"未知来源"安装
+
+            ### 使用方法
+            粘贴网易云音乐的专辑或歌手分享链接，点击「开始查询」即可。
+
+            支持格式：
+            - `http://music.163.com/album/165230666/`
+            - `http://music.163.com/artist?id=144290`
+            - 网易云 App 内直接分享的文本（含链接即可）
+          files: dist/*.apk
+          draft: false
+          prerelease: false
 
       - name: Upload build logs
         if: always()
