@@ -395,7 +395,7 @@ jobs:
           # p4a 'create' initialises the bootstrap but stops before packaging.
           # We copy our density-specific mipmap PNGs + anydpi XML in so aapt
           # picks them up when it later runs during 'apk'.
-          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','create','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,pillow','--arch','arm64-v8a','--package','org.netease.netease_comment_viewer','--name','云评','--version','0.1.0','--icon','icon.png','--private','.','--add-source','java','--permission','INTERNET','--permission','ACCESS_NETWORK_STATE']; main()" 2>&1 | tee buildozer-create.log || true
+          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','create','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,pillow','--arch','arm64-v8a','--dist-name','yunping','--package','org.netease.netease_comment_viewer','--name','云评','--version','1.0.0','--icon','icon.png','--private','.','--add-source','java','--permission','INTERNET','--permission','ACCESS_NETWORK_STATE']; main()" 2>&1 | tee buildozer-create.log || true
 
           BOOT_RES=$(find ~/.local/share/python-for-android/build/bootstrap_builds \
                           -type d -name res 2>/dev/null | head -1)
@@ -421,7 +421,7 @@ jobs:
           echo "=== build APK with p4a toolchain ==="
           # IMPORTANT: import ci_patch BEFORE running p4a toolchain so the patch
           # is installed before p4a's Recipe class is ever referenced.
-          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,pillow','--arch','arm64-v8a','--package','org.netease.netease_comment_viewer','--name','云评','--version','0.1.0','--icon','icon.png','--private','.','--add-source','java','--permission','INTERNET','--permission','ACCESS_NETWORK_STATE']; main()" 2>&1 | tee buildozer-ci.log
+          python -c "import sys; sys.path.insert(0, '.github/ci_patch'); import ci_patch; from pythonforandroid.toolchain import main; sys.argv = ['','apk','--debug','--bootstrap','sdl2','--android-api','34','--ndk-api','21','--requirements','python3,kivy==2.3.0,pillow','--arch','arm64-v8a','--dist-name','yunping','--package','org.netease.netease_comment_viewer','--name','云评','--version','1.0.0','--icon','icon.png','--private','.','--add-source','java','--permission','INTERNET','--permission','ACCESS_NETWORK_STATE']; main()" 2>&1 | tee buildozer-ci.log
           BUILD_EXIT=${PIPESTATUS[0]}
           echo "p4a build exit code: $BUILD_EXIT"
           echo "build_exit=$BUILD_EXIT" >> "$GITHUB_OUTPUT"
