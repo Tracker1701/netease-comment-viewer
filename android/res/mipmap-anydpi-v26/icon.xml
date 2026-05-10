@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 8.0+ adaptive icon
+    Foreground: speech bubbles + music note on transparent bg
+    Background: pink-to-deep-red gradient rounded square
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_bg"/>
+    <foreground android:drawable="@drawable/ic_launcher_fg"/>
+</adaptive-icon>
