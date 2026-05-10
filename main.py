@@ -321,8 +321,10 @@ class Root(BoxLayout):
         self._rows_box = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
+            height=0,
             spacing=0,
         )
+        # minimum_height binding keeps height in sync after layout passes
         self._rows_box.bind(minimum_height=self._rows_box.setter("height"))
         self._scroll.add_widget(self._rows_box)
         self.add_widget(self._scroll)
@@ -385,11 +387,17 @@ class Root(BoxLayout):
         self._rows_box.clear_widgets()
         for i, data in enumerate(rows):
             self._rows_box.add_widget(_make_row(i, data))
+        # Explicitly set height to avoid ScrollView content-clip issue
+        self._rows_box.height  = dp(52) * len(rows)
         self.progress          = 100
         self.status            = f"完成，共 {len(rows)} 条记录"
         self.summary           = summary
         self._col_hdr.opacity  = 1 if rows else 0
-        self._scroll.scroll_y  = 1  # scroll back to top
+        # Scroll reset deferred by 2 frames: let layout settle first
+        def _reset_scroll(dt):
+            self._rows_box.height = dp(52) * len(rows)  # re-assert after layout
+            self._scroll.scroll_y = 1
+        Clock.schedule_once(_reset_scroll, 0.05)
 
     def _show_error(self, msg):
         self.status = f"请求失败：{msg}"
