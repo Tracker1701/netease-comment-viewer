@@ -8,37 +8,32 @@ from kivy.clock import Clock
 from kivy.core.text import LabelBase
 from kivy.core.window import Window
 from kivy.graphics import Color, Rectangle
-from kivy.lang import Builder
 from kivy.metrics import dp, sp
-from kivy.properties import BooleanProperty, ListProperty, NumericProperty, StringProperty
+from kivy.properties import NumericProperty, StringProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
-from kivy.uix.recycleboxlayout import RecycleBoxLayout
-from kivy.uix.recycleview import RecycleView
-from kivy.uix.recycleview.views import RecycleDataViewBehavior
+from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
 from netease_api import parse_url, query_album, query_artist
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-C_BG        = (0.08, 0.08, 0.10, 1)
-C_SURFACE   = (0.13, 0.13, 0.17, 1)
-C_BORDER    = (0.22, 0.22, 0.28, 1)
-C_RED       = (0.80, 0.20, 0.20, 1)
-C_RED_DARK  = (0.28, 0.06, 0.06, 1)
-C_RED_TEXT  = (1.00, 0.78, 0.78, 1)
-C_ROW_A     = (0.10, 0.10, 0.13, 1)
-C_ROW_B     = (0.14, 0.14, 0.18, 1)
-C_TEXT      = (0.92, 0.92, 0.96, 1)
-C_TEXT2     = (0.52, 0.52, 0.60, 1)
-C_GRAY_BTN  = (0.26, 0.26, 0.32, 1)
-C_DIVIDER   = (0.20, 0.20, 0.26, 1)
+C_BG       = (0.08, 0.08, 0.10, 1)
+C_SURFACE  = (0.13, 0.13, 0.17, 1)
+C_BORDER   = (0.22, 0.22, 0.28, 1)
+C_RED      = (0.80, 0.20, 0.20, 1)
+C_RED_DARK = (0.28, 0.06, 0.06, 1)
+C_RED_TEXT = (1.00, 0.78, 0.78, 1)
+C_ROW_A    = (0.10, 0.10, 0.13, 1)
+C_ROW_B    = (0.14, 0.14, 0.18, 1)
+C_TEXT     = (0.92, 0.92, 0.96, 1)
+C_TEXT2    = (0.52, 0.52, 0.60, 1)
+C_GRAY_BTN = (0.26, 0.26, 0.32, 1)
+C_DIVIDER  = (0.20, 0.20, 0.26, 1)
 # ─────────────────────────────────────────────────────────────────────────────
 
-
-# ── Font registration ─────────────────────────────────────────────────────────
 _FONT = "Roboto"
 
 
@@ -76,166 +71,143 @@ try:
         print("[font] NotoSansSC not found, using Roboto", file=sys.stderr)
 except Exception as e:
     print(f"[font] {e}", file=sys.stderr)
-# ─────────────────────────────────────────────────────────────────────────────
 
 
-# ── KV rule for ResultRow ─────────────────────────────────────────────────────
-# Defining layout in KV ensures `text_size: self.width, None` is a live Kivy
-# binding — it re-evaluates every time the label's width changes after layout,
-# which is what makes text actually visible in RecycleView rows.
-Builder.load_string(f"""
-<ResultRow>:
-    orientation: 'horizontal'
-    size_hint_y: None
-    height: dp(52)
-    padding: dp(14), dp(4), dp(14), dp(4)
-    spacing: dp(10)
-    canvas.before:
-        Color:
-            rgba: root._bg_color
-        Rectangle:
-            pos: self.pos
-            size: self.size
-        Color:
-            rgba: root._div_color
-        Rectangle:
-            pos: self.pos
-            size: self.width, dp(1)
-    Label:
-        id: lbl_main
-        size_hint_x: 1
-        halign: 'left'
-        valign: 'middle'
-        font_name: '{_FONT}'
-        text_size: self.width, None
-        shorten: True
-        shorten_from: 'right'
-    Label:
-        id: lbl_cnt
-        size_hint_x: None
-        width: dp(90)
-        halign: 'right'
-        valign: 'middle'
-        font_name: '{_FONT}'
-        text_size: self.width, None
-""")
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Row builder ───────────────────────────────────────────────────────────────
+def _make_row(index, data):
+    is_hdr = data.get("is_header", False)
 
+    if is_hdr:
+        bg_color  = C_RED_DARK
+        div_color = (0.50, 0.12, 0.12, 1)
+    elif index % 2 == 0:
+        bg_color  = C_ROW_A
+        div_color = C_DIVIDER
+    else:
+        bg_color  = C_ROW_B
+        div_color = C_DIVIDER
 
-class ResultRow(RecycleDataViewBehavior, BoxLayout):
-    _bg_color  = ListProperty(list(C_ROW_A))
-    _div_color = ListProperty(list(C_DIVIDER))
+    row = BoxLayout(
+        orientation="horizontal",
+        size_hint_y=None,
+        height=dp(52),
+        padding=[dp(14), dp(4), dp(14), dp(4)],
+        spacing=dp(10),
+    )
 
-    def refresh_view_attrs(self, rv, index, data):
-        super().refresh_view_attrs(rv, index, data)
+    with row.canvas.before:
+        _bg  = Color(*bg_color)
+        _bgr = Rectangle(pos=row.pos, size=row.size)
+        _dc  = Color(*div_color)
+        _dr  = Rectangle(pos=row.pos, size=(row.width, dp(1)))
 
-        lbl_main = self.ids.lbl_main
-        lbl_cnt  = self.ids.lbl_cnt
-        is_hdr   = data.get("is_header", False)
+    def _upd(w, _):
+        _bgr.pos  = w.pos
+        _bgr.size = w.size
+        _dr.pos   = w.pos
+        _dr.size  = (w.width, dp(1))
+    row.bind(pos=_upd, size=_upd)
+
+    # Left: song / album name — stretches to fill available width
+    lbl_main = Label(
+        halign="left",
+        valign="middle",
+        font_name=_FONT,
+        size_hint_x=1,
+        shorten=True,
+        shorten_from="right",
+    )
+    # Bind text_size to the label's own width. In a ScrollView (non-recycling)
+    # each widget is added once; width goes from 0 → real value on first layout,
+    # which triggers this callback reliably.
+    lbl_main.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
+
+    # Right: comment count — fixed 90dp
+    lbl_cnt = Label(
+        halign="right",
+        valign="middle",
+        font_name=_FONT,
+        size_hint_x=None,
+        width=dp(90),
+        text_size=(dp(90), None),
+    )
+
+    if is_hdr:
         album    = data.get("album", "")
         song     = data.get("song", "")
         comments = data.get("comments", "")
 
-        if is_hdr:
-            self._bg_color    = list(C_RED_DARK)
-            self._div_color   = [0.50, 0.12, 0.12, 1]
-            lbl_main.text     = album
-            lbl_main.bold     = True
-            lbl_main.color    = list(C_RED_TEXT)
-            lbl_main.font_size = sp(14)
-            # artist query: song = "共N首 | 专辑评论X", comments = ""
-            # album query:  song = "专辑评论数",         comments = count
-            if comments:
-                lbl_cnt.text      = f"专辑评论\n{comments}"
-            else:
-                lbl_cnt.text      = song
-            lbl_cnt.font_size = sp(11)
-            lbl_cnt.color     = [1.0, 0.62, 0.62, 0.85]
-            lbl_cnt.bold      = False
-        else:
-            self._bg_color    = list(C_ROW_A if index % 2 == 0 else C_ROW_B)
-            self._div_color   = list(C_DIVIDER)
-            lbl_main.text     = song
-            lbl_main.bold     = False
-            lbl_main.color    = list(C_TEXT)
-            lbl_main.font_size = sp(14)
-            lbl_cnt.text      = comments
-            lbl_cnt.font_size = sp(14)
-            lbl_cnt.color     = list(C_TEXT2)
-            lbl_cnt.bold      = False
+        lbl_main.text      = album
+        lbl_main.bold      = True
+        lbl_main.color     = C_RED_TEXT
+        lbl_main.font_size = sp(14)
 
-        return self
+        # album query  → comments = count string, song = "专辑评论数"
+        # artist query → comments = "",           song = "共N首 | 专辑评论X"
+        lbl_cnt.text      = f"专辑\n{comments}" if comments else song
+        lbl_cnt.font_size = sp(11)
+        lbl_cnt.color     = (1.0, 0.62, 0.62, 0.85)
+    else:
+        lbl_main.text      = data.get("song", "")
+        lbl_main.bold      = False
+        lbl_main.color     = C_TEXT
+        lbl_main.font_size = sp(14)
+        lbl_cnt.text       = data.get("comments", "")
+        lbl_cnt.font_size  = sp(14)
+        lbl_cnt.color      = C_TEXT2
+
+    row.add_widget(lbl_main)
+    row.add_widget(lbl_cnt)
+    return row
 
 
-class ResultsView(RecycleView):
-    data = ListProperty([])
+def _make_col_header():
+    hdr = BoxLayout(
+        orientation="horizontal",
+        size_hint_y=None,
+        height=dp(34),
+        padding=[dp(14), 0, dp(14), 0],
+        spacing=dp(10),
+    )
+    with hdr.canvas.before:
+        Color(0.16, 0.16, 0.20, 1)
+        r = Rectangle(pos=hdr.pos, size=hdr.size)
+    hdr.bind(pos=lambda w, _: setattr(r, "pos", w.pos),
+             size=lambda w, _: setattr(r, "size", w.size))
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.viewclass = "ResultRow"
-        layout = RecycleBoxLayout(
-            default_size=(None, dp(52)),
-            default_size_hint=(1, None),
-            size_hint_y=None,
-            orientation="vertical",
-        )
-        layout.bind(minimum_height=layout.setter("height"))
-        self.add_widget(layout)
+    lbl_l = Label(
+        text="专辑 / 歌曲", halign="left", valign="middle",
+        font_name=_FONT, font_size=sp(11), bold=True, color=C_TEXT2,
+        size_hint_x=1,
+    )
+    lbl_l.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
+    lbl_r = Label(
+        text="评论数", halign="right", valign="middle",
+        font_name=_FONT, font_size=sp(11), bold=True, color=C_TEXT2,
+        size_hint_x=None, width=dp(90), text_size=(dp(90), None),
+    )
+    hdr.add_widget(lbl_l)
+    hdr.add_widget(lbl_r)
+    return hdr
+
+
+def _divider():
+    w = Widget(size_hint_y=None, height=dp(1))
+    with w.canvas:
+        Color(*C_DIVIDER)
+        r = Rectangle(pos=w.pos, size=w.size)
+    w.bind(pos=lambda x, _: setattr(r, "pos", x.pos),
+           size=lambda x, _: setattr(r, "size", x.size))
+    return w
 
 
 def _flat_btn(text, bg):
     return Button(
-        text=text,
-        font_name=_FONT,
-        font_size=sp(15),
-        bold=True,
-        background_normal="",
-        background_down="",
-        background_color=bg,
-        color=C_TEXT,
+        text=text, font_name=_FONT, font_size=sp(15), bold=True,
+        background_normal="", background_down="",
+        background_color=bg, color=C_TEXT,
     )
-
-
-class SectionDivider(Widget):
-    def __init__(self, **kwargs):
-        super().__init__(size_hint_y=None, height=dp(1), **kwargs)
-        with self.canvas:
-            Color(*C_DIVIDER)
-            r = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=lambda w, _: setattr(r, "pos", w.pos),
-                  size=lambda w, _: setattr(r, "size", w.size))
-
-
-class ListHeader(BoxLayout):
-    def __init__(self, **kwargs):
-        super().__init__(
-            orientation="horizontal",
-            size_hint_y=None, height=dp(34),
-            padding=[dp(14), 0, dp(14), 0],
-            spacing=dp(10),
-            **kwargs,
-        )
-        with self.canvas.before:
-            Color(0.16, 0.16, 0.20, 1)
-            r = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=lambda w, _: setattr(r, "pos", w.pos),
-                  size=lambda w, _: setattr(r, "size", w.size))
-
-        lbl_left = Label(
-            text="专辑 / 歌曲", halign="left", valign="middle",
-            font_name=_FONT, font_size=sp(11),
-            bold=True, color=C_TEXT2, size_hint_x=1,
-        )
-        lbl_left.bind(size=lambda w, s: setattr(w, "text_size", s))
-        lbl_right = Label(
-            text="评论数", halign="right", valign="middle",
-            font_name=_FONT, font_size=sp(11),
-            bold=True, color=C_TEXT2,
-            size_hint_x=None, width=dp(90),
-        )
-        lbl_right.bind(size=lambda w, s: setattr(w, "text_size", s))
-        self.add_widget(lbl_left)
-        self.add_widget(lbl_right)
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 class Root(BoxLayout):
@@ -252,11 +224,11 @@ class Root(BoxLayout):
         )
         with self.canvas.before:
             Color(*C_BG)
-            bg = Rectangle(pos=self.pos, size=self.size)
-        self.bind(pos=lambda w, _: setattr(bg, "pos", w.pos),
-                  size=lambda w, _: setattr(bg, "size", w.size))
+            _bg = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=lambda w, _: setattr(_bg, "pos", w.pos),
+                  size=lambda w, _: setattr(_bg, "size", w.size))
 
-        # ── Title ─────────────────────────────────────────────────────────────
+        # Title
         title = Label(
             text="网易云音乐评论查看器",
             size_hint_y=None, height=dp(48),
@@ -268,22 +240,22 @@ class Root(BoxLayout):
         self.add_widget(title)
         self.add_widget(Widget(size_hint_y=None, height=dp(6)))
 
-        # ── Input card ────────────────────────────────────────────────────────
-        input_card = BoxLayout(
+        # Input card
+        card = BoxLayout(
             orientation="vertical",
             size_hint_y=None, height=dp(84),
             padding=[dp(1), dp(1), dp(1), dp(1)],
         )
-        with input_card.canvas.before:
+        with card.canvas.before:
             Color(*C_BORDER)
-            b_rect = Rectangle(pos=input_card.pos, size=input_card.size)
+            br = Rectangle(pos=card.pos, size=card.size)
             Color(*C_SURFACE)
-            i_rect = Rectangle(pos=input_card.pos, size=input_card.size)
-        def _upd(w, _):
-            b_rect.pos = w.pos; b_rect.size = w.size
-            i_rect.pos = (w.x+dp(1), w.y+dp(1))
-            i_rect.size = (w.width-dp(2), w.height-dp(2))
-        input_card.bind(pos=_upd, size=_upd)
+            ir = Rectangle(pos=card.pos, size=card.size)
+        def _upd_card(w, _):
+            br.pos = w.pos; br.size = w.size
+            ir.pos = (w.x + dp(1), w.y + dp(1))
+            ir.size = (w.width - dp(2), w.height - dp(2))
+        card.bind(pos=_upd_card, size=_upd_card)
 
         self.input_text = TextInput(
             hint_text="粘贴网易云音乐专辑或歌手分享链接…",
@@ -296,22 +268,21 @@ class Root(BoxLayout):
             cursor_color=C_RED,
             padding=[dp(10), dp(8)],
         )
-        input_card.add_widget(self.input_text)
-        self.add_widget(input_card)
+        card.add_widget(self.input_text)
+        self.add_widget(card)
         self.add_widget(Widget(size_hint_y=None, height=dp(10)))
 
-        # ── Buttons ───────────────────────────────────────────────────────────
+        # Buttons
         btn_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(10))
         self.query_btn = _flat_btn("开始查询", C_RED)
         self.query_btn.bind(on_press=self.start_query)
-        clear_btn = _flat_btn("清  空", C_GRAY_BTN)
-        clear_btn.bind(on_press=self.clear)
         btn_row.add_widget(self.query_btn)
-        btn_row.add_widget(clear_btn)
+        btn_row.add_widget(_flat_btn("清  空", C_GRAY_BTN))
+        btn_row.children[0].bind(on_press=self.clear)
         self.add_widget(btn_row)
         self.add_widget(Widget(size_hint_y=None, height=dp(10)))
 
-        # ── Progress bar ──────────────────────────────────────────────────────
+        # Progress bar
         pb = BoxLayout(size_hint_y=None, height=dp(5))
         with pb.canvas.before:
             Color(0.18, 0.18, 0.22, 1)
@@ -327,7 +298,7 @@ class Root(BoxLayout):
         self.add_widget(pb)
         self.add_widget(Widget(size_hint_y=None, height=dp(6)))
 
-        # ── Status ────────────────────────────────────────────────────────────
+        # Status
         self._status_lbl = Label(
             text=self.status,
             size_hint_y=None, height=dp(24),
@@ -339,18 +310,26 @@ class Root(BoxLayout):
         self.add_widget(self._status_lbl)
         self.add_widget(Widget(size_hint_y=None, height=dp(4)))
 
-        # ── Column header ─────────────────────────────────────────────────────
-        self._list_hdr = ListHeader()
-        self._list_hdr.opacity = 0
-        self.add_widget(self._list_hdr)
-        self.add_widget(SectionDivider())
+        # Column header (hidden until first result)
+        self._col_hdr = _make_col_header()
+        self._col_hdr.opacity = 0
+        self.add_widget(self._col_hdr)
+        self.add_widget(_divider())
 
-        # ── Results list ──────────────────────────────────────────────────────
-        self.results = ResultsView()
-        self.add_widget(self.results)
-        self.add_widget(SectionDivider())
+        # ScrollView → inner BoxLayout holds all result rows
+        self._scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        self._rows_box = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=0,
+        )
+        self._rows_box.bind(minimum_height=self._rows_box.setter("height"))
+        self._scroll.add_widget(self._rows_box)
+        self.add_widget(self._scroll)
 
-        # ── Summary ───────────────────────────────────────────────────────────
+        self.add_widget(_divider())
+
+        # Summary
         self._summary_lbl = Label(
             text="",
             size_hint_y=None, height=dp(54),
@@ -364,23 +343,23 @@ class Root(BoxLayout):
 
     # ── Actions ───────────────────────────────────────────────────────────────
     def clear(self, *_):
-        self.input_text.text     = ""
-        self.results.data        = []
-        self.progress            = 0
-        self.status              = "就绪"
-        self.summary             = ""
-        self._list_hdr.opacity   = 0
+        self.input_text.text   = ""
+        self._rows_box.clear_widgets()
+        self.progress          = 0
+        self.status            = "就绪"
+        self.summary           = ""
+        self._col_hdr.opacity  = 0
 
     def start_query(self, *_):
         parsed = parse_url(self.input_text.text.strip())
         if not parsed:
             self.status = "未识别到专辑或歌手链接"
             return
-        self.results.data        = []
-        self.progress            = 0
-        self.summary             = ""
-        self._list_hdr.opacity   = 0
-        self.query_btn.disabled  = True
+        self._rows_box.clear_widgets()
+        self.progress          = 0
+        self.summary           = ""
+        self._col_hdr.opacity  = 0
+        self.query_btn.disabled = True
         kind, eid = parsed
         Thread(target=self._run_query, args=(kind, eid), daemon=True).start()
 
@@ -403,11 +382,14 @@ class Root(BoxLayout):
         self.status   = msg
 
     def _show_result(self, rows, summary):
-        self.results.data       = rows
-        self.progress           = 100
-        self.status             = f"完成，共 {len(rows)} 条记录"
-        self.summary            = summary
-        self._list_hdr.opacity  = 1 if rows else 0
+        self._rows_box.clear_widgets()
+        for i, data in enumerate(rows):
+            self._rows_box.add_widget(_make_row(i, data))
+        self.progress          = 100
+        self.status            = f"完成，共 {len(rows)} 条记录"
+        self.summary           = summary
+        self._col_hdr.opacity  = 1 if rows else 0
+        self._scroll.scroll_y  = 1  # scroll back to top
 
     def _show_error(self, msg):
         self.status = f"请求失败：{msg}"
