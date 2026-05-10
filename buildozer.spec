@@ -1,13 +1,13 @@
 [app]
 
 # App 元信息
-title = 网易云评论数查看器
+title = 云评
 package.name = netease_comment_viewer
 package.domain = org.netease
 
 # 源码
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,ttf,otf,java,xml
+source.include_exts = py,png,jpg,kv,atlas,ttf,otf,svg,java,xml
 
 # 入口文件
 mainmodule = main
@@ -34,8 +34,8 @@ android.res = android/res
 # manifest application 属性：启用网络安全配置
 android.manifest.application_attributes = android:networkSecurityConfig="@xml/network_security_config"
 
-# App 图标（默认用 Kivy 内置）
-# icon.filename = %(source.dir)s/icon.png
+# App 图标：项目根目录 icon.png（512×512，Android 8+ 自适应图标）
+icon.filename = %(source.dir)s/icon.png
 
 # 启动画面（可选）
 # splashimage.filename = %(source.dir)s/splash.png
