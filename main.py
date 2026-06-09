@@ -12,12 +12,16 @@ from kivy.metrics import dp, sp
 from kivy.properties import NumericProperty, StringProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.checkbox import CheckBox
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
+from kivy.uix.popup import Popup
+from kivy.uix.screenmanager import Screen, ScreenManager
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 
+from history_store import HistoryStore
 from netease_api import parse_url, query_album, query_artist
 
 # ── Palette ───────────────────────────────────────────────────────────────────
@@ -260,7 +264,7 @@ class Root(BoxLayout):
     status   = StringProperty("就绪")
     summary  = StringProperty("")
 
-    def __init__(self, **kwargs):
+    def __init__(self, history_store=None, open_history=None, **kwargs):
         super().__init__(
             orientation="vertical",
             padding=[dp(14), dp(12), dp(14), dp(10)],
@@ -268,6 +272,9 @@ class Root(BoxLayout):
             **kwargs,
         )
         _attach_bg(self, C_BG)
+        self.history_store = history_store
+        self.open_history = open_history
+        self._active_query = None
 
         # Title
         title = Label(
@@ -313,13 +320,16 @@ class Root(BoxLayout):
         self.add_widget(Widget(size_hint_y=None, height=dp(10)))
 
         # Buttons
-        btn_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(10))
+        btn_row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
         self.query_btn = _flat_btn("开始查询", C_RED)
         self.query_btn.bind(on_press=self.start_query)
         self.clear_btn = _flat_btn("清  空", C_GRAY_BTN)
         self.clear_btn.bind(on_press=self.clear)
+        self.history_btn = _flat_btn("历史记录", C_GRAY_BTN)
+        self.history_btn.bind(on_press=lambda *_: self.open_history and self.open_history())
         btn_row.add_widget(self.query_btn)
         btn_row.add_widget(self.clear_btn)
+        btn_row.add_widget(self.history_btn)
         self.add_widget(btn_row)
         self.add_widget(Widget(size_hint_y=None, height=dp(10)))
 
@@ -423,6 +433,11 @@ class Root(BoxLayout):
         self._col_hdr.opacity   = 0
         self.query_btn.disabled = True
         kind, eid = parsed
+        self._active_query = {
+            "category": kind,
+            "entity_id": eid,
+            "source_text": self.input_text.text.strip(),
+        }
         Thread(target=self._run_query, args=(kind, eid), daemon=True).start()
 
     def _run_query(self, kind, eid):
@@ -460,16 +475,359 @@ class Root(BoxLayout):
         self.summary          = summary
         self._col_hdr.opacity = 1 if rows else 0
         self._scroll.scroll_y = 1
+        self._save_history(rows, summary)
+
+    def _save_history(self, rows, summary):
+        if not self.history_store or not self._active_query:
+            return
+        try:
+            query = self._active_query
+            if query["category"] == "album" and rows:
+                title = rows[0].get("album") or f"专辑 #{query['entity_id']}"
+            else:
+                title = f"歌手 #{query['entity_id']}"
+            self.history_store.add(
+                query["category"],
+                query["entity_id"],
+                query["source_text"],
+                title,
+                summary,
+                rows,
+            )
+            self.status = f"{self.status}，已保存到历史记录"
+        except Exception as exc:
+            print(f"[history] save failed: {exc}", file=sys.stderr)
+            self.status = f"{self.status}，历史记录保存失败"
 
     def _show_error(self, msg):
         self.status = f"请求失败：{msg}"
+
+
+def _confirm_delete(message, on_confirm):
+    content = BoxLayout(orientation="vertical", padding=dp(14), spacing=dp(12))
+    label = Label(
+        text=message,
+        font_name=_FONT,
+        font_size=sp(14),
+        color=C_TEXT,
+        halign="center",
+        valign="middle",
+    )
+    label.bind(size=lambda w, s: setattr(w, "text_size", s))
+    buttons = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(10))
+    cancel = _flat_btn("取消", C_GRAY_BTN)
+    confirm = _flat_btn("删除", C_RED)
+    buttons.add_widget(cancel)
+    buttons.add_widget(confirm)
+    content.add_widget(label)
+    content.add_widget(buttons)
+    popup = Popup(
+        title="确认删除",
+        title_font=_FONT,
+        content=content,
+        size_hint=(0.88, None),
+        height=dp(190),
+        auto_dismiss=False,
+    )
+    cancel.bind(on_press=popup.dismiss)
+
+    def do_delete(*_):
+        popup.dismiss()
+        on_confirm()
+
+    confirm.bind(on_press=do_delete)
+    popup.open()
+
+
+class HistoryScreen(Screen):
+    def __init__(self, history_store, open_detail, **kwargs):
+        super().__init__(**kwargs)
+        self.history_store = history_store
+        self.open_detail = open_detail
+        self.selected = set()
+        self.select_mode = False
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(14), dp(12), dp(14), dp(10)],
+            spacing=dp(8),
+        )
+        _attach_bg(root, C_BG)
+        top = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+        back = _flat_btn("返回", C_GRAY_BTN)
+        back.bind(on_press=lambda *_: setattr(self.manager, "current", "query"))
+        self.mode_btn = _flat_btn("多选", C_GRAY_BTN)
+        self.mode_btn.bind(on_press=self.toggle_select_mode)
+        self.all_btn = _flat_btn("全选", C_GRAY_BTN)
+        self.all_btn.bind(on_press=self.toggle_all)
+        self.delete_btn = _flat_btn("删除", C_RED)
+        self.delete_btn.bind(on_press=self.delete_selected)
+        top.add_widget(back)
+        top.add_widget(self.mode_btn)
+        top.add_widget(self.all_btn)
+        top.add_widget(self.delete_btn)
+        root.add_widget(top)
+
+        self.status_label = Label(
+            text="解析历史",
+            size_hint_y=None,
+            height=dp(34),
+            font_name=_FONT,
+            font_size=sp(18),
+            bold=True,
+            color=C_RED,
+            halign="left",
+            valign="middle",
+        )
+        self.status_label.bind(size=lambda w, s: setattr(w, "text_size", s))
+        root.add_widget(self.status_label)
+
+        scroll = ScrollView(do_scroll_x=False)
+        self.rows_box = BoxLayout(
+            orientation="vertical", size_hint_y=None, spacing=dp(8)
+        )
+        self.rows_box.bind(minimum_height=self.rows_box.setter("height"))
+        scroll.add_widget(self.rows_box)
+        root.add_widget(scroll)
+        self.add_widget(root)
+
+    def on_pre_enter(self, *_):
+        self.refresh()
+
+    def refresh(self):
+        self.records = self.history_store.load()
+        valid_ids = {record["history_id"] for record in self.records}
+        self.selected.intersection_update(valid_ids)
+        self.rows_box.clear_widgets()
+        self.all_btn.disabled = not self.select_mode or not self.records
+        self.delete_btn.disabled = not self.select_mode or not self.selected
+        self.mode_btn.text = "退出多选" if self.select_mode else "多选"
+        self.status_label.text = (
+            f"已选 {len(self.selected)} 条"
+            if self.select_mode
+            else f"解析历史（{len(self.records)}）"
+        )
+
+        if not self.records:
+            self.rows_box.add_widget(
+                Label(
+                    text="暂无解析历史\n返回首页完成一次解析后会自动保存",
+                    size_hint_y=None,
+                    height=dp(130),
+                    font_name=_FONT,
+                    font_size=sp(14),
+                    color=C_TEXT2,
+                    halign="center",
+                )
+            )
+            return
+
+        for record in self.records:
+            self.rows_box.add_widget(self._make_history_row(record))
+
+    def _make_history_row(self, record):
+        row = BoxLayout(
+            size_hint_y=None,
+            height=dp(112),
+            padding=[dp(8), dp(8), dp(8), dp(8)],
+            spacing=dp(8),
+        )
+        _attach_bg(row, C_SURFACE)
+        history_id = record["history_id"]
+        category = {"album": "专辑", "artist": "歌手"}.get(
+            record.get("category"), "未知"
+        )
+        created_at = record.get("created_at", "").replace("T", " ")[:16]
+        text = (
+            f"[{category}] {record.get('title', '未命名解析记录')}\n"
+            f"{created_at} · {record.get('row_count', len(record.get('rows', [])))} 条\n"
+            f"{record.get('summary', '')}"
+        )
+        if self.select_mode:
+            checkbox = CheckBox(
+                active=history_id in self.selected,
+                size_hint_x=None,
+                width=dp(38),
+                color=C_RED,
+            )
+            checkbox.bind(
+                active=lambda _, active, hid=history_id: self.set_selected(hid, active)
+            )
+            row.add_widget(checkbox)
+        main = Button(
+            text=text,
+            font_name=_FONT,
+            font_size=sp(12),
+            color=C_TEXT,
+            background_normal="",
+            background_down="",
+            background_color=(0, 0, 0, 0),
+            halign="left",
+            valign="middle",
+        )
+        main.bind(size=lambda w, s: setattr(w, "text_size", s))
+        if self.select_mode:
+            main.bind(
+                on_press=lambda *_args, hid=history_id: self.set_selected(
+                    hid, hid not in self.selected
+                )
+            )
+        else:
+            main.bind(on_press=lambda *_args, hid=history_id: self.open_detail(hid))
+        row.add_widget(main)
+        if not self.select_mode:
+            delete = _flat_btn("删除", C_RED)
+            delete.size_hint_x = None
+            delete.width = dp(64)
+            delete.bind(on_press=lambda *_args, hid=history_id: self.delete_one(hid))
+            row.add_widget(delete)
+        return row
+
+    def toggle_select_mode(self, *_):
+        self.select_mode = not self.select_mode
+        self.selected.clear()
+        self.refresh()
+
+    def set_selected(self, history_id, active):
+        if active:
+            self.selected.add(history_id)
+        else:
+            self.selected.discard(history_id)
+        self.refresh()
+
+    def toggle_all(self, *_):
+        all_ids = {record["history_id"] for record in self.records}
+        self.selected = set() if self.selected == all_ids else all_ids
+        self.refresh()
+
+    def delete_one(self, history_id):
+        _confirm_delete(
+            "确定删除这条解析记录吗？删除后无法恢复。",
+            lambda: self._delete_ids([history_id]),
+        )
+
+    def delete_selected(self, *_):
+        if not self.selected:
+            return
+        count = len(self.selected)
+        _confirm_delete(
+            f"确定删除已选择的 {count} 条解析记录吗？删除后无法恢复。",
+            lambda: self._delete_ids(list(self.selected)),
+        )
+
+    def _delete_ids(self, history_ids):
+        self.history_store.delete_many(history_ids)
+        self.selected.difference_update(history_ids)
+        self.refresh()
+
+
+class HistoryDetailScreen(Screen):
+    def __init__(self, history_store, **kwargs):
+        super().__init__(**kwargs)
+        self.history_store = history_store
+        self.history_id = None
+
+        root = BoxLayout(
+            orientation="vertical",
+            padding=[dp(14), dp(12), dp(14), dp(10)],
+            spacing=dp(8),
+        )
+        _attach_bg(root, C_BG)
+        top = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(8))
+        back = _flat_btn("返回历史", C_GRAY_BTN)
+        back.bind(on_press=lambda *_: setattr(self.manager, "current", "history"))
+        delete = _flat_btn("删除当前记录", C_RED)
+        delete.bind(on_press=self.delete_current)
+        top.add_widget(back)
+        top.add_widget(delete)
+        root.add_widget(top)
+        self.meta = Label(
+            text="",
+            size_hint_y=None,
+            height=dp(132),
+            font_name=_FONT,
+            font_size=sp(12),
+            color=C_RED_TEXT,
+            halign="left",
+            valign="middle",
+        )
+        self.meta.bind(size=lambda w, s: setattr(w, "text_size", s))
+        root.add_widget(self.meta)
+        scroll = ScrollView(do_scroll_x=False)
+        self.rows_box = BoxLayout(orientation="vertical", size_hint_y=None)
+        self.rows_box.bind(minimum_height=self.rows_box.setter("height"))
+        scroll.add_widget(self.rows_box)
+        root.add_widget(scroll)
+        self.add_widget(root)
+
+    def show_record(self, history_id):
+        self.history_id = history_id
+        record = self.history_store.get(history_id)
+        self.rows_box.clear_widgets()
+        if not record:
+            self.meta.text = "记录不存在"
+            return
+        category = {"album": "专辑", "artist": "歌手"}.get(
+            record.get("category"), "未知"
+        )
+        self.meta.text = (
+            f"[{category}] {record.get('title', '未命名解析记录')}\n"
+            f"解析时间：{record.get('created_at', '').replace('T', ' ')[:19]}\n"
+            f"对象 ID：{record.get('entity_id', '')}\n"
+            f"原始输入：{record.get('source_text', '')}\n"
+            f"{record.get('summary', '')}"
+        )
+        main_w = max(
+            Window.width - dp(14) * 2 - _PAD_H * 2 - _GAP - _CNT_W, dp(60)
+        )
+        rows = record.get("rows", [])
+        for index, data in enumerate(rows):
+            self.rows_box.add_widget(_make_row(index, data, main_w))
+        self.rows_box.height = _ROW_H * len(rows)
+
+    def delete_current(self, *_):
+        if not self.history_id:
+            return
+        _confirm_delete(
+            "确定删除这条解析记录吗？删除后无法恢复。",
+            self._delete_current,
+        )
+
+    def _delete_current(self):
+        self.history_store.delete(self.history_id)
+        self.history_id = None
+        self.manager.current = "history"
 
 
 class NeteaseCommentApp(App):
     def build(self):
         self.title = "网易云评论查看器"
         Window.clearcolor = C_BG
-        return Root()
+        self.history_store = HistoryStore(self.user_data_dir)
+        self.manager = ScreenManager()
+        query_screen = Screen(name="query")
+        query_screen.add_widget(
+            Root(history_store=self.history_store, open_history=self.open_history)
+        )
+        self.history_screen = HistoryScreen(
+            self.history_store, self.open_detail, name="history"
+        )
+        self.detail_screen = HistoryDetailScreen(
+            self.history_store, name="history_detail"
+        )
+        self.manager.add_widget(query_screen)
+        self.manager.add_widget(self.history_screen)
+        self.manager.add_widget(self.detail_screen)
+        return self.manager
+
+    def open_history(self):
+        self.history_screen.select_mode = False
+        self.history_screen.selected.clear()
+        self.manager.current = "history"
+
+    def open_detail(self, history_id):
+        self.detail_screen.show_record(history_id)
+        self.manager.current = "history_detail"
 
 
 if __name__ == "__main__":
