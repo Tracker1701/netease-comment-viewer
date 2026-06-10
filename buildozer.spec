@@ -13,7 +13,7 @@ source.include_exts = py,png,jpg,kv,atlas,ttf,otf,svg,java,xml
 mainmodule = main
 
 # Kivy 版本（固定兼容版本）
-version = 1.0.0
+version = 1.0.1
 
 # 依赖（仅使用核心 Kivy，不引入未使用的 KivyMD）
 requirements = python3,kivy==2.3.0,pillow

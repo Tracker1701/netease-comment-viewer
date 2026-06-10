@@ -818,7 +818,27 @@ class NeteaseCommentApp(App):
         self.manager.add_widget(query_screen)
         self.manager.add_widget(self.history_screen)
         self.manager.add_widget(self.detail_screen)
+        Window.bind(on_keyboard=self._on_keyboard)
         return self.manager
+
+    def _on_keyboard(self, _window, key, _scancode, _codepoint, _modifiers):
+        if key != 27:
+            return False
+        if self.manager.current == "history_detail":
+            self.manager.current = "history"
+            return True
+        if self.manager.current == "history":
+            if self.history_screen.select_mode:
+                self.history_screen.select_mode = False
+                self.history_screen.selected.clear()
+                self.history_screen.refresh()
+            else:
+                self.manager.current = "query"
+            return True
+        return False
+
+    def on_stop(self):
+        Window.unbind(on_keyboard=self._on_keyboard)
 
     def open_history(self):
         self.history_screen.select_mode = False
